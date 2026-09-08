@@ -1,0 +1,14 @@
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+
+# Local state store
+credits_store.json
+
+# Node dependencies & logs
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log

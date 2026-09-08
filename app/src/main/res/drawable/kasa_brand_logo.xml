@@ -1,0 +1,99 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    
+    <!-- Outer ambient subtle glow -->
+    <path
+        android:pathData="M54,18 C73.88,18 90,34.12 90,54 C90,73.88 73.88,90 54,90 C34.12,90 18,73.88 18,54 C18,34.12 34.12,18 54,18 Z"
+        android:fillAlpha="0.12"
+        android:fillColor="#E5A93C" />
+
+    <!-- Left Harmonic Speech Arc (Warm Clay to Warm Gold) -->
+    <path
+        android:pathData="M32,36 C24,47 24,61 32,72 C35,76 40,73 38,69 C32,60 32,48 38,39 C40,35 35,32 32,36 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="24"
+                android:startY="32"
+                android:endX="38"
+                android:endY="76"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#C86D51" />
+                <item android:offset="1.0" android:color="#D4A017" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Right Harmonic Speech Arc (Warm Gold to Warm Clay) -->
+    <path
+        android:pathData="M76,36 C84,47 84,61 76,72 C73,76 68,73 70,69 C76,60 76,48 70,39 C68,35 73,32 76,36 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="84"
+                android:startY="32"
+                android:endX="70"
+                android:endY="76"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#F5B842" />
+                <item android:offset="1.0" android:color="#C86D51" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Center Upper Speech Arc / Resonator -->
+    <path
+        android:pathData="M40,32 C49,25 59,25 68,32 C72,35 69,40 65,38 C58,32 50,32 43,38 C39,40 36,35 40,32 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="40"
+                android:startY="25"
+                android:endX="68"
+                android:endY="38"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#C86D51" />
+                <item android:offset="1.0" android:color="#F5B842" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Center Lower Speech Arc / Anchor -->
+    <path
+        android:pathData="M40,76 C49,83 59,83 68,76 C72,73 69,68 65,70 C58,76 50,76 43,70 C39,68 36,73 40,76 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="40"
+                android:startY="83"
+                android:endX="68"
+                android:endY="70"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#D4A017" />
+                <item android:offset="1.0" android:color="#B85D3B" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Central Core Diamond / Radiant Intelligence Beacon -->
+    <path
+        android:pathData="M54,38 L62,54 L54,70 L46,54 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="46"
+                android:startY="38"
+                android:endX="62"
+                android:endY="70"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FFD166" />
+                <item android:offset="0.5" android:color="#E5A93C" />
+                <item android:offset="1.0" android:color="#C86D51" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Core Radiant Point -->
+    <path
+        android:pathData="M54,50 C56.2,50 58,51.8 58,54 C58,56.2 56.2,58 54,58 C51.8,58 50,56.2 50,54 C50,51.8 51.8,50 54,50 Z"
+        android:fillColor="#FFF7E6" />
+</vector>

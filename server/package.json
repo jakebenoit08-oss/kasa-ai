@@ -1,0 +1,17 @@
+{
+  "name": "kasa-ai-backend",
+  "version": "1.0.0",
+  "description": "KASA AI Secure Backend Service for AIMusicAPI Integration and Credit Management",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": ["kasa", "ai", "music", "aimusicapi", "sonic"],
+  "author": "KASA AI Team",
+  "license": "UNLICENSED"
+}

@@ -1,0 +1,6 @@
+{
+  "name": "KASA AI",
+  "description": "Ghana's conversational AI companion featuring real-time live voice, multimodal chat, study quizzes, image creation, music generation studio, user memory, and Firebase authentication.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
