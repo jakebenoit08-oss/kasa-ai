@@ -1,5 +1,7 @@
 package com.example
 
+import com.example.core.ai.music.BillingCheckoutBackendResponse
+import com.example.core.ai.music.BillingVerifySessionBackendResponse
 import com.example.core.ai.music.MusicGenerationService
 import com.example.core.error.AppError
 import com.example.core.result.AppResult
@@ -88,30 +90,67 @@ class KasaMusicStudioTest {
       title: String?,
       isInstrumental: Boolean,
       onStatusUpdate: (String) -> Unit
-    ): AppResult<GeneratedSong> {
+    ): AppResult<List<GeneratedSong>> {
       if (remainingCredits <= 0) {
         return AppResult.Error(AppError.ServiceUnavailable("You have used your music generation allowance for this subscription period."))
       }
       onStatusUpdate("Creating your song...")
       onStatusUpdate("Your song is being generated...")
-      onStatusUpdate("Song ready 🎵")
+      onStatusUpdate("Songs ready 🎵")
       if (shouldSucceed) {
-        val song = GeneratedSong(
-          id = "song_123",
+        val baseTitle = title ?: "Accra Vibes"
+        val song1 = GeneratedSong(
+          id = "song_123_var1",
           userId = userId,
-          title = title ?: "Accra Vibes",
+          title = "$baseTitle (Option 1)",
           prompt = prompt,
-          audioUrl = "https://example.com/audio/accra_vibes.mp3",
+          audioUrl = "https://example.com/audio/accra_vibes_1.mp3",
           duration = 125.0f,
           imageUrl = "https://example.com/img/accra.jpg",
           genre = genre ?: "Ghanaian Afrobeats",
           language = language ?: "English",
           isInstrumental = isInstrumental,
         )
-        return AppResult.Success(song)
+        val song2 = GeneratedSong(
+          id = "song_123_var2",
+          userId = userId,
+          title = "$baseTitle (Option 2)",
+          prompt = prompt,
+          audioUrl = "https://example.com/audio/accra_vibes_2.mp3",
+          duration = 120.0f,
+          imageUrl = "https://example.com/img/accra.jpg",
+          genre = genre ?: "Ghanaian Afrobeats",
+          language = language ?: "English",
+          isInstrumental = isInstrumental,
+        )
+        return AppResult.Success(listOf(song1, song2))
       } else {
         return AppResult.Error(AppError.AiEngineError("Generation failed on music backend."))
       }
+    }
+
+    override suspend fun initializeCheckout(planId: String): AppResult<BillingCheckoutBackendResponse> {
+      return AppResult.Success(
+        BillingCheckoutBackendResponse(
+          success = true,
+          authorizationUrl = "https://checkout.paystack.com/fake_checkout_123",
+          reference = "kasa_fake_ref_123",
+          planId = planId,
+        )
+      )
+    }
+
+    override suspend fun verifySession(reference: String): AppResult<BillingVerifySessionBackendResponse> {
+      remainingCredits = 5
+      return AppResult.Success(
+        BillingVerifySessionBackendResponse(
+          success = true,
+          message = "Payment verified successfully",
+          tier = "plus",
+          remaining = 5,
+          musicCredits = 5,
+        )
+      )
     }
   }
 
@@ -232,14 +271,54 @@ class KasaMusicStudioTest {
 
     val active = viewModel.uiState.value.activeSong
     assertNotNull(active)
-    assertEquals("https://example.com/audio/accra_vibes.mp3", active?.audioUrl)
-    assertEquals("Song ready 🎵", viewModel.uiState.value.musicStatusMessage)
+    assertEquals("https://example.com/audio/accra_vibes_1.mp3", active?.audioUrl)
+    assertEquals("Your songs are ready 🎵", viewModel.uiState.value.musicStatusMessage)
+    assertEquals(2, viewModel.uiState.value.activeSongVariations.size)
     assertFalse(viewModel.uiState.value.isMusicGenerating)
 
-    // Verify stored in repository
-    val songInRepo = musicRepo.getSongById("song_123")
-    assertNotNull(songInRepo)
-    assertEquals("song_123", songInRepo?.id)
+    // Verify both variations stored in repository
+    val song1 = musicRepo.getSongById("song_123_var1")
+    val song2 = musicRepo.getSongById("song_123_var2")
+    assertNotNull(song1)
+    assertNotNull(song2)
+    assertEquals("song_123_var1", song1?.id)
+    assertEquals("song_123_var2", song2?.id)
+  }
+
+  @Test
+  fun testMusicVariationSelectionAndIndependentPlayback() = runTest {
+    val userRepo = FakeUserRepo()
+    val imageRepo = GeneratedImageRepositoryImpl(EmptyImageDao())
+    val songDao = FakeGeneratedSongDao()
+    val musicRepo = MusicRepositoryImpl(songDao)
+    val musicService = FakeMusicService(shouldSucceed = true)
+
+    val viewModel = CreateViewModel(
+      userRepository = userRepo,
+      generatedImageRepository = imageRepo,
+      musicRepository = musicRepo,
+      musicGenerationService = musicService,
+    )
+
+    viewModel.selectMode(CreateStudioMode.MUSIC)
+    viewModel.updateMusicPrompt("Smooth highlife guitar")
+    viewModel.generateMusic()
+
+    val variations = viewModel.uiState.value.activeSongVariations
+    assertEquals(2, variations.size)
+
+    // Option 1 is active by default
+    assertEquals("song_123_var1", viewModel.uiState.value.activeSong?.id)
+
+    // Select Option 2
+    val option2 = variations[1]
+    viewModel.selectVariation(option2)
+    assertEquals("song_123_var2", viewModel.uiState.value.activeSong?.id)
+
+    // Select Option 1 back
+    val option1 = variations[0]
+    viewModel.selectVariation(option1)
+    assertEquals("song_123_var1", viewModel.uiState.value.activeSong?.id)
   }
 
   @Test
@@ -263,5 +342,34 @@ class KasaMusicStudioTest {
 
     assertNull(viewModel.uiState.value.activeSong)
     assertTrue(viewModel.uiState.value.musicErrorMessage?.contains("allowance") == true)
+  }
+
+  @Test
+  fun testMusicUpgradeAndVerificationFlow() = runTest {
+    val userRepo = FakeUserRepo()
+    val imageRepo = GeneratedImageRepositoryImpl(EmptyImageDao())
+    val songDao = FakeGeneratedSongDao()
+    val musicRepo = MusicRepositoryImpl(songDao)
+    val musicService = FakeMusicService(remainingCredits = 0)
+
+    val viewModel = CreateViewModel(
+      userRepository = userRepo,
+      generatedImageRepository = imageRepo,
+      musicRepository = musicRepo,
+      musicGenerationService = musicService,
+    )
+
+    // Initial state: dialog closed
+    assertFalse(viewModel.uiState.value.showUpgradeDialog)
+
+    // Open upgrade dialog
+    viewModel.showUpgradeDialog(true)
+    assertTrue(viewModel.uiState.value.showUpgradeDialog)
+
+    // Verify session
+    viewModel.verifyCheckout("kasa_test_ref_123")
+    assertFalse(viewModel.uiState.value.showUpgradeDialog)
+    assertNotNull(viewModel.uiState.value.billingMessage)
+    assertTrue(viewModel.uiState.value.billingMessage!!.contains("successful"))
   }
 }

@@ -248,11 +248,14 @@ fun CreateScreen(
             item {
               MusicPlayerCard(
                 song = uiState.activeSong!!,
+                variations = uiState.activeSongVariations,
                 isPlaying = uiState.isPlayingAudio,
                 isBuffering = uiState.isBufferingAudio,
                 currentPositionMs = uiState.playbackPositionMs,
                 durationMs = uiState.playbackDurationMs,
                 onTogglePlayPause = { viewModel.togglePlayPause() },
+                onPlayVariation = { viewModel.playVariation(it) },
+                onSelectVariation = { viewModel.selectVariation(it) },
                 onSeek = { viewModel.seekAudio(it) },
                 onShare = { viewModel.shareSong(context, uiState.activeSong!!) },
                 onSave = {
@@ -281,6 +284,7 @@ fun CreateScreen(
                 onSelectHistorySong = { viewModel.playSong(it) },
                 onDeleteHistorySong = { viewModel.deleteSong(it) },
                 onDismissError = { viewModel.clearMusicErrorMessage() },
+                onOpenUpgrade = { viewModel.showUpgradeDialog(true) },
               )
             }
           }
@@ -289,6 +293,18 @@ fun CreateScreen(
         item {
           Spacer(modifier = Modifier.height(KasaSpacing.large))
         }
+      }
+
+      if (uiState.showUpgradeDialog) {
+        MusicUpgradeDialog(
+          credits = uiState.musicCredits,
+          isUpgrading = uiState.isUpgrading,
+          checkoutReference = uiState.checkoutReference,
+          billingMessage = uiState.billingMessage,
+          onDismiss = { viewModel.showUpgradeDialog(false) },
+          onSelectPlan = { planId -> viewModel.startCheckout(context, planId) },
+          onVerifyPayment = { ref -> viewModel.verifyCheckout(ref) },
+        )
       }
     }
   }

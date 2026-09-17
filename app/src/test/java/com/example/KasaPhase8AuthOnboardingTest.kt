@@ -113,6 +113,10 @@ class KasaPhase8AuthOnboardingTest {
       authStateFlow.value = AuthState.Unauthenticated
       return AuthActionResult.Success(Unit)
     }
+
+    override suspend fun getIdToken(forceRefresh: Boolean): String? {
+      return user?.id?.let { "fake_token_$it" }
+    }
   }
 
   private class FakeUserRepository(

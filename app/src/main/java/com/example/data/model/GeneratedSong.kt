@@ -24,4 +24,7 @@ data class UserMusicCredits(
   val periodStart: Long = 0L,
   val periodEnd: Long = 0L,
   val isUnlimitedDev: Boolean = false,
+  val subscriptionStatus: String = "unpaid",
+  val musicCredits: Int = remaining,
+  val isOwner: Boolean = false,
 )

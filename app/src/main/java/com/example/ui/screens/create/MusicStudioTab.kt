@@ -38,6 +38,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -86,14 +87,18 @@ fun MusicStudioTabContent(
   onSelectHistorySong: (GeneratedSong) -> Unit,
   onDeleteHistorySong: (String) -> Unit,
   onDismissError: () -> Unit,
+  onOpenUpgrade: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   Column(
     modifier = modifier.fillMaxWidth(),
     verticalArrangement = Arrangement.spacedBy(KasaSpacing.medium),
   ) {
-    // 1. Music Header Card with Credit Pill
-    MusicHeaderCard(credits = uiState.musicCredits)
+    // 1. Music Header Card with Credit Pill & Upgrade Action
+    MusicHeaderCard(
+      credits = uiState.musicCredits,
+      onOpenUpgrade = onOpenUpgrade,
+    )
 
     // 2. Error Banner (if any)
     if (uiState.musicErrorMessage != null) {
@@ -130,6 +135,7 @@ fun MusicStudioTabContent(
         onLanguageSelect = onLanguageSelect,
         onInstrumentalToggle = onInstrumentalToggle,
         onGenerate = onGenerate,
+        onOpenUpgrade = onOpenUpgrade,
       )
 
       // Quick Starter Ideas
@@ -151,7 +157,12 @@ fun MusicStudioTabContent(
 }
 
 @Composable
-private fun MusicHeaderCard(credits: UserMusicCredits?) {
+private fun MusicHeaderCard(
+  credits: UserMusicCredits?,
+  onOpenUpgrade: () -> Unit,
+) {
+  val isOwner = credits?.isOwner == true
+
   Card(
     modifier = Modifier
       .fillMaxWidth()
@@ -181,7 +192,7 @@ private fun MusicHeaderCard(credits: UserMusicCredits?) {
           modifier = Modifier.size(26.dp),
         )
       }
-      Spacer(modifier = Modifier.width(16.dp))
+      Spacer(modifier = Modifier.width(14.dp))
       Column(modifier = Modifier.weight(1f)) {
         Row(
           verticalAlignment = Alignment.CenterVertically,
@@ -196,15 +207,16 @@ private fun MusicHeaderCard(credits: UserMusicCredits?) {
 
           // Allowance Pill / Badge
           val allowanceText = when {
+            isOwner -> "Owner Access"
             credits == null -> "AI Music"
             credits.isUnlimitedDev -> "Unlimited (Dev)"
             credits.remaining <= 0 -> "0 left this cycle"
             else -> "${credits.remaining}/${credits.limit} left"
           }
-          val allowanceColor = if (credits?.remaining ?: 1 > 0) {
-            Color(0xFF2E7D32)
-          } else {
-            MaterialTheme.colorScheme.error
+          val allowanceColor = when {
+            isOwner -> Color(0xFFD4AF37)
+            credits?.remaining ?: 1 > 0 -> Color(0xFF2E7D32)
+            else -> MaterialTheme.colorScheme.error
           }
 
           KasaBadge(
@@ -214,10 +226,25 @@ private fun MusicHeaderCard(credits: UserMusicCredits?) {
           )
         }
         Text(
-          text = "Turn your idea into a song.",
+          text = if (isOwner) "Developer & Owner Access • Unlimited" else "Turn your idea into a song.",
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+      }
+
+      if (!isOwner) {
+        OutlinedButton(
+          onClick = onOpenUpgrade,
+          shape = RoundedCornerShape(12.dp),
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+          modifier = Modifier.testTag("music_upgrade_button"),
+        ) {
+          Text(
+            text = if (credits?.tier == "plus" || credits?.tier == "pro") "Manage" else "Upgrade",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+          )
+        }
       }
     }
   }
@@ -243,6 +270,7 @@ private fun MusicComposerCard(
   onLanguageSelect: (String) -> Unit,
   onInstrumentalToggle: (Boolean) -> Unit,
   onGenerate: () -> Unit,
+  onOpenUpgrade: () -> Unit = {},
 ) {
   var showAdvancedControls by remember { mutableStateOf(false) }
 
@@ -443,19 +471,74 @@ private fun MusicComposerCard(
 
       Spacer(modifier = Modifier.height(16.dp))
 
-      // Generate Button
-      val hasAvailableAllowance = credits == null || credits.isUnlimitedDev || credits.remaining > 0
+      // Allowance Check & Generate Button
+      val isOwner = credits?.isOwner == true
+      val hasAvailableAllowance = isOwner || credits == null || credits.isUnlimitedDev || credits.remaining > 0
+
+      if (!hasAvailableAllowance) {
+        Card(
+          modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpenUpgrade)
+            .testTag("music_allowance_exhausted_banner"),
+          shape = RoundedCornerShape(12.dp),
+          colors = CardDefaults.cardColors(
+            containerColor = Color(0xFFD4AF37).copy(alpha = 0.15f),
+          ),
+        ) {
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+          ) {
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = "Cycle Allowance Exhausted",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF8A6D00),
+              )
+              Text(
+                text = "Upgrade to Plus (GH₵49) or Pro (GH₵99) for more generations.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+            Button(
+              onClick = onOpenUpgrade,
+              shape = RoundedCornerShape(10.dp),
+              colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFFD4AF37),
+                contentColor = Color(0xFF1C1B1F),
+              ),
+              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+            ) {
+              Text("Upgrade", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+            }
+          }
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+      }
+
       Button(
-        onClick = onGenerate,
-        enabled = prompt.trim().isNotBlank() && !isGenerating && hasAvailableAllowance,
+        onClick = {
+          if (hasAvailableAllowance) {
+            onGenerate()
+          } else {
+            onOpenUpgrade()
+          }
+        },
+        enabled = prompt.trim().isNotBlank() && !isGenerating,
         modifier = Modifier
           .fillMaxWidth()
           .height(48.dp)
           .testTag("music_generate_button"),
         shape = RoundedCornerShape(12.dp),
         colors = ButtonDefaults.buttonColors(
-          containerColor = Color(0xFFD4AF37),
-          contentColor = Color(0xFF1C1B1F),
+          containerColor = if (hasAvailableAllowance) Color(0xFFD4AF37) else MaterialTheme.colorScheme.surfaceVariant,
+          contentColor = if (hasAvailableAllowance) Color(0xFF1C1B1F) else MaterialTheme.colorScheme.onSurfaceVariant,
         ),
       ) {
         Icon(
@@ -465,7 +548,7 @@ private fun MusicComposerCard(
         )
         Spacer(modifier = Modifier.width(8.dp))
         Text(
-          text = if (hasAvailableAllowance) "Generate Song" else "Allowance Exhausted",
+          text = if (hasAvailableAllowance) "Generate Song" else "Upgrade to Continue Generating",
           fontWeight = FontWeight.Bold,
         )
       }

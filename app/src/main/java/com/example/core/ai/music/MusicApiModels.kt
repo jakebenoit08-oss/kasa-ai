@@ -37,9 +37,24 @@ data class MusicClipBackendDto(
 data class MusicTaskBackendResponse(
   @Json(name = "status") val status: String? = null,
   @Json(name = "message") val message: String? = null,
+  @Json(name = "clips") val clips: List<MusicClipBackendDto>? = null,
   @Json(name = "clip") val clip: MusicClipBackendDto? = null,
   @Json(name = "error") val error: String? = null,
-)
+) {
+  fun getAllValidClips(): List<MusicClipBackendDto> {
+    val result = mutableListOf<MusicClipBackendDto>()
+    clips?.forEach { c ->
+      if (!c.audioUrl.isNullOrBlank()) {
+        result.add(c)
+      }
+    }
+    // Backwards-compatible fallback: if clips list is absent or empty, check single clip
+    if (result.isEmpty() && clip != null && !clip.audioUrl.isNullOrBlank()) {
+      result.add(clip)
+    }
+    return result
+  }
+}
 
 @JsonClass(generateAdapter = true)
 data class MusicCreditsBackendResponse(
@@ -48,9 +63,47 @@ data class MusicCreditsBackendResponse(
   @Json(name = "used") val used: Int? = null,
   @Json(name = "limit") val limit: Int? = null,
   @Json(name = "remaining") val remaining: Int? = null,
+  @Json(name = "musicCredits") val musicCredits: Int? = null,
+  @Json(name = "subscriptionStatus") val subscriptionStatus: String? = null,
   @Json(name = "periodStart") val periodStart: Long? = null,
   @Json(name = "periodEnd") val periodEnd: Long? = null,
   @Json(name = "isUnlimitedDev") val isUnlimitedDev: Boolean? = null,
+  @Json(name = "isOwner") val isOwner: Boolean? = null,
+  @Json(name = "error") val error: String? = null,
+  @Json(name = "message") val message: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class BillingCheckoutBackendRequest(
+  @Json(name = "planId") val planId: String,
+)
+
+@JsonClass(generateAdapter = true)
+data class BillingCheckoutBackendResponse(
+  @Json(name = "success") val success: Boolean? = null,
+  @Json(name = "authorizationUrl") val authorizationUrl: String? = null,
+  @Json(name = "reference") val reference: String? = null,
+  @Json(name = "planId") val planId: String? = null,
+  @Json(name = "error") val error: String? = null,
+  @Json(name = "message") val message: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class BillingVerifySessionBackendRequest(
+  @Json(name = "reference") val reference: String,
+)
+
+@JsonClass(generateAdapter = true)
+data class BillingVerifySessionBackendResponse(
+  @Json(name = "success") val success: Boolean? = null,
+  @Json(name = "alreadyProcessed") val alreadyProcessed: Boolean? = null,
+  @Json(name = "tier") val tier: String? = null,
+  @Json(name = "subscriptionStatus") val subscriptionStatus: String? = null,
+  @Json(name = "musicCredits") val musicCredits: Int? = null,
+  @Json(name = "limit") val limit: Int? = null,
+  @Json(name = "remaining") val remaining: Int? = null,
+  @Json(name = "periodEnd") val periodEnd: Long? = null,
+  @Json(name = "isOwner") val isOwner: Boolean? = null,
   @Json(name = "error") val error: String? = null,
   @Json(name = "message") val message: String? = null,
 )

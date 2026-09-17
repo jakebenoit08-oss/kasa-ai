@@ -41,7 +41,7 @@ object AppConfig {
   // After deploying the /server directory to Render, replace the placeholder
   // below with your live Render HTTPS URL (e.g. "https://kasa-music-service.onrender.com/").
   // Can also be overridden dynamically at runtime in the app under Settings -> Music Studio Backend.
-  const val MUSIC_BACKEND_PRODUCTION_URL = "https://YOUR-RENDER-SERVICE.onrender.com/"
+  const val MUSIC_BACKEND_PRODUCTION_URL = "https://kasa-ai.onrender.com/"
   // =========================================================================
 
   // Local development presets for offline emulator and ADB reverse testing

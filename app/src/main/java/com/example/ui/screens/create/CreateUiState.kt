@@ -53,6 +53,8 @@ data class CreateUiState(
   val isMusicGenerating: Boolean = false,
   val musicStatusMessage: String = "",
   val activeSong: GeneratedSong? = null,
+  val activeSongVariations: List<GeneratedSong> = emptyList(),
+  val selectedVariationIndex: Int = 0,
   val musicErrorMessage: String? = null,
   val musicSaveStatusMessage: String? = null,
   val musicCredits: UserMusicCredits? = null,
@@ -61,6 +63,10 @@ data class CreateUiState(
   val isBufferingAudio: Boolean = false,
   val playbackPositionMs: Long = 0L,
   val playbackDurationMs: Long = 0L,
+  val showUpgradeDialog: Boolean = false,
+  val isUpgrading: Boolean = false,
+  val checkoutReference: String? = null,
+  val billingMessage: String? = null,
 ) {
   val isPromptValid: Boolean
     get() = prompt.trim().isNotBlank()

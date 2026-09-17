@@ -64,4 +64,10 @@ interface AuthService {
    * Permanently deletes the authenticated user account from Firebase.
    */
   suspend fun deleteAccount(): AuthActionResult<Unit>
+
+  /**
+   * Retrieves the current user's Firebase Auth ID token (JWT) for authenticating with KASA backend.
+   * Returns null if unauthenticated or Firebase is unavailable.
+   */
+  suspend fun getIdToken(forceRefresh: Boolean = false): String?
 }

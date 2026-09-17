@@ -21,3 +21,7 @@ server/credits_store.json
 node_modules/
 *.log
 debug.keystore
+serviceAccountKey.json
+*service_account*.json
+*service-account*.json
+*firebase-adminsdk*.json

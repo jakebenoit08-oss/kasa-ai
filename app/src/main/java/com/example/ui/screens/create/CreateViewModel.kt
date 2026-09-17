@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.example.core.auth.AuthService
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -46,6 +47,7 @@ class CreateViewModel(
   private val musicRepository: MusicRepository? = null,
   private val musicGenerationService: MusicGenerationService? = null,
   private val applicationContext: Context? = null,
+  private val authService: AuthService? = null,
 ) : ViewModel() {
 
   private val _uiState = MutableStateFlow(CreateUiState())
@@ -221,6 +223,7 @@ class CreateViewModel(
         context = appContext,
         musicRepository = activeMusicRepo!!,
         baseUrl = backendUrl,
+        authService = authService,
       )
       refreshCredits()
     }
@@ -536,6 +539,7 @@ class CreateViewModel(
           context = targetContext,
           musicRepository = activeMusicRepo!!,
           baseUrl = AppConfig.getMusicBackendUrl(targetContext),
+          authService = authService,
         )
       }
     }
@@ -577,14 +581,19 @@ class CreateViewModel(
 
         when (result) {
           is AppResult.Success -> {
-            val song = result.data
-            activeMusicRepo?.saveSong(song)
+            val songs = result.data
+            songs.forEach { song ->
+              activeMusicRepo?.saveSong(song)
+            }
+            val primarySong = songs.firstOrNull()
             _uiState.update {
               it.copy(
                 isMusicGenerating = false,
-                activeSong = song,
+                activeSongVariations = songs,
+                activeSong = primarySong,
+                selectedVariationIndex = 0,
                 musicErrorMessage = null,
-                musicStatusMessage = "Song ready 🎵",
+                musicStatusMessage = if (songs.size > 1) "Your songs are ready 🎵" else "Song ready 🎵",
               )
             }
             refreshCredits(userId)
@@ -593,6 +602,7 @@ class CreateViewModel(
             _uiState.update {
               it.copy(
                 isMusicGenerating = false,
+                errorMessage = result.error.message,
                 musicErrorMessage = result.error.message,
                 musicStatusMessage = "",
               )
@@ -606,6 +616,36 @@ class CreateViewModel(
       } finally {
         isMusicRequestInFlight = false
       }
+    }
+  }
+
+  fun selectVariation(song: GeneratedSong) {
+    val state = _uiState.value
+    val index = state.activeSongVariations.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
+    _uiState.update {
+      it.copy(
+        activeSong = song,
+        selectedVariationIndex = index,
+      )
+    }
+  }
+
+  fun playVariation(song: GeneratedSong) {
+    val state = _uiState.value
+    val isSameSong = state.activeSong?.id == song.id
+    val index = state.activeSongVariations.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
+
+    if (isSameSong && state.isPlayingAudio) {
+      audioPlayer?.pause()
+    } else {
+      _uiState.update {
+        it.copy(
+          activeSong = song,
+          selectedVariationIndex = index,
+          musicErrorMessage = null,
+        )
+      }
+      audioPlayer?.play(song.audioUrl)
     }
   }
 
@@ -628,9 +668,19 @@ class CreateViewModel(
   }
 
   fun playSong(song: GeneratedSong) {
+    val state = _uiState.value
+    val currentVariations = if (state.activeSongVariations.any { it.id == song.id }) {
+      state.activeSongVariations
+    } else {
+      listOf(song)
+    }
+    val index = currentVariations.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
+
     _uiState.update {
       it.copy(
         activeSong = song,
+        activeSongVariations = currentVariations,
+        selectedVariationIndex = index,
         musicErrorMessage = null,
         musicStatusMessage = "Song ready 🎵",
       )
@@ -640,7 +690,14 @@ class CreateViewModel(
 
   fun clearActiveSong() {
     audioPlayer?.stop()
-    _uiState.update { it.copy(activeSong = null, musicStatusMessage = "") }
+    _uiState.update {
+      it.copy(
+        activeSong = null,
+        activeSongVariations = emptyList(),
+        selectedVariationIndex = 0,
+        musicStatusMessage = "",
+      )
+    }
   }
 
   fun deleteSong(id: String) {
@@ -674,6 +731,84 @@ class CreateViewModel(
 
   fun clearMusicErrorMessage() {
     _uiState.update { it.copy(musicErrorMessage = null) }
+  }
+
+  fun showUpgradeDialog(show: Boolean = true) {
+    _uiState.update { it.copy(showUpgradeDialog = show, billingMessage = null) }
+  }
+
+  fun startCheckout(context: Context, planId: String) {
+    val service = activeMusicService ?: return
+    _uiState.update { it.copy(isUpgrading = true, billingMessage = "Preparing secure checkout...") }
+
+    viewModelScope.launch {
+      val res = service.initializeCheckout(planId)
+      when (res) {
+        is AppResult.Success -> {
+          val checkout = res.data
+          val url = checkout.authorizationUrl
+          val ref = checkout.reference
+          _uiState.update {
+            it.copy(
+              isUpgrading = false,
+              checkoutReference = ref,
+              billingMessage = "Opening Paystack checkout...",
+            )
+          }
+          if (!url.isNullOrBlank()) {
+            try {
+              val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+              }
+              context.startActivity(intent)
+            } catch (e: Exception) {
+              _uiState.update { it.copy(billingMessage = "Failed to launch browser: ${e.message}") }
+            }
+          }
+        }
+        is AppResult.Error -> {
+          _uiState.update {
+            it.copy(
+              isUpgrading = false,
+              billingMessage = res.error.message,
+            )
+          }
+        }
+        is AppResult.Loading -> {}
+      }
+    }
+  }
+
+  fun verifyCheckout(reference: String? = null) {
+    val ref = reference ?: _uiState.value.checkoutReference ?: return
+    val service = activeMusicService ?: return
+    _uiState.update { it.copy(isUpgrading = true, billingMessage = "Verifying payment with Paystack...") }
+
+    viewModelScope.launch {
+      val res = service.verifySession(ref)
+      when (res) {
+        is AppResult.Success -> {
+          val verified = res.data
+          _uiState.update {
+            it.copy(
+              isUpgrading = false,
+              showUpgradeDialog = false,
+              billingMessage = "Payment successful! Your credits have been updated.",
+            )
+          }
+          refreshCredits()
+        }
+        is AppResult.Error -> {
+          _uiState.update {
+            it.copy(
+              isUpgrading = false,
+              billingMessage = res.error.message,
+            )
+          }
+        }
+        is AppResult.Loading -> {}
+      }
+    }
   }
 
   override fun onCleared() {

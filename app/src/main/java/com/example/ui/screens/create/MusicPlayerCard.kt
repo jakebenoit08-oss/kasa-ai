@@ -7,11 +7,14 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -22,6 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.MusicNote
@@ -41,6 +45,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -62,11 +67,14 @@ import com.example.ui.theme.KasaSpacing
 @Composable
 fun MusicPlayerCard(
   song: GeneratedSong,
+  variations: List<GeneratedSong> = emptyList(),
   isPlaying: Boolean,
   isBuffering: Boolean,
   currentPositionMs: Long,
   durationMs: Long,
   onTogglePlayPause: () -> Unit,
+  onPlayVariation: (GeneratedSong) -> Unit = {},
+  onSelectVariation: (GeneratedSong) -> Unit = {},
   onSeek: (Float) -> Unit,
   onShare: () -> Unit,
   onSave: () -> Unit,
@@ -118,7 +126,14 @@ fun MusicPlayerCard(
             containerColor = Color(0xFFD4AF37).copy(alpha = 0.2f),
             contentColor = Color(0xFF8A6D00),
           )
-          if (song.genre != null) {
+          if (variations.size > 1) {
+            Spacer(modifier = Modifier.width(6.dp))
+            KasaBadge(
+              text = "2 Variations",
+              containerColor = Color(0xFF1B2E1D),
+              contentColor = Color(0xFF81C784),
+            )
+          } else if (song.genre != null) {
             Spacer(modifier = Modifier.width(6.dp))
             KasaBadge(
               text = song.genre,
@@ -143,13 +158,203 @@ fun MusicPlayerCard(
         }
       }
 
-      Spacer(modifier = Modifier.height(16.dp))
+      Spacer(modifier = Modifier.height(14.dp))
 
-      // Vinyl / Waveform Visualizer Banner
+      // Multiple Song Variations Section (Option 1 & Option 2)
+      if (variations.size > 1) {
+        Text(
+          text = "Your songs are ready",
+          style = MaterialTheme.typography.titleLarge,
+          fontWeight = FontWeight.Bold,
+          color = MaterialTheme.colorScheme.onSurface,
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+          text = "AIMusicAPI generated 2 unique variations. Listen to both and choose your favorite.",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.height(14.dp))
+
+        variations.forEachIndexed { index, variation ->
+          val isSelected = variation.id == song.id
+          val isThisVariationPlaying = isSelected && isPlaying
+          val optionLabel = "Option ${index + 1}"
+
+          Card(
+            modifier = Modifier
+              .fillMaxWidth()
+              .clickable { onSelectVariation(variation) }
+              .testTag("music_variation_card_${index + 1}"),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(
+              containerColor = if (isSelected) {
+                Color(0xFFD4AF37).copy(alpha = 0.12f)
+              } else {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+              },
+            ),
+            border = BorderStroke(
+              width = if (isSelected) 2.dp else 1.dp,
+              color = if (isSelected) Color(0xFFD4AF37) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+            ),
+          ) {
+            Column(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp)
+            ) {
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+              ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                  KasaBadge(
+                    text = optionLabel,
+                    containerColor = if (isSelected) Color(0xFFD4AF37) else MaterialTheme.colorScheme.surfaceVariant,
+                    contentColor = if (isSelected) Color(0xFF1C1B1F) else MaterialTheme.colorScheme.onSurfaceVariant,
+                  )
+                  if (isSelected) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                      Icon(
+                        imageVector = Icons.Outlined.Check,
+                        contentDescription = null,
+                        tint = Color(0xFFB8860B),
+                        modifier = Modifier.size(14.dp),
+                      )
+                      Spacer(modifier = Modifier.width(4.dp))
+                      Text(
+                        text = "Selected",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFB8860B),
+                      )
+                    }
+                  }
+                }
+
+                if (!isSelected) {
+                  TextButton(
+                    onClick = { onSelectVariation(variation) },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier.height(28.dp).testTag("music_select_variation_${index + 1}"),
+                  ) {
+                    Text(
+                      text = "Use this",
+                      fontSize = 12.sp,
+                      fontWeight = FontWeight.SemiBold,
+                      color = Color(0xFFD4AF37),
+                    )
+                  }
+                }
+              }
+
+              Spacer(modifier = Modifier.height(8.dp))
+
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                // Artwork / Vinyl Icon Thumbnail
+                Box(
+                  modifier = Modifier
+                    .size(50.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(
+                      Brush.linearGradient(
+                        colors = if (index == 0) {
+                          listOf(Color(0xFF1B2E1D), Color(0xFFD4AF37))
+                        } else {
+                          listOf(Color(0xFF2C2416), Color(0xFF9E782F))
+                        }
+                      )
+                    ),
+                  contentAlignment = Alignment.Center,
+                ) {
+                  Icon(
+                    imageVector = Icons.Outlined.MusicNote,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(24.dp),
+                  )
+                }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                // Title and Duration
+                Column(modifier = Modifier.weight(1f)) {
+                  Text(
+                    text = variation.title.ifBlank { "Variation ${index + 1}" },
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                  Spacer(modifier = Modifier.height(2.dp))
+                  Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                  ) {
+                    Text(
+                      text = formatSeconds(variation.duration),
+                      style = MaterialTheme.typography.bodySmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (variation.genre != null) {
+                      Text(
+                        text = "•",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                      )
+                      Text(
+                        text = variation.genre,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                      )
+                    }
+                  }
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                // Independent Play/Pause Button for this Option
+                IconButton(
+                  onClick = { onPlayVariation(variation) },
+                  modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(
+                      if (isThisVariationPlaying) Color(0xFFD4AF37) else MaterialTheme.colorScheme.surfaceVariant
+                    )
+                    .testTag("music_play_variation_${index + 1}"),
+                ) {
+                  Icon(
+                    imageVector = if (isThisVariationPlaying) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
+                    contentDescription = if (isThisVariationPlaying) "Pause $optionLabel" else "Play $optionLabel",
+                    tint = if (isThisVariationPlaying) Color(0xFF1C1B1F) else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(24.dp),
+                  )
+                }
+              }
+            }
+          }
+
+          if (index < variations.size - 1) {
+            Spacer(modifier = Modifier.height(10.dp))
+          }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+      }
+
+      // Vinyl / Waveform Visualizer Banner for currently active/playing variation
       Box(
         modifier = Modifier
           .fillMaxWidth()
-          .height(170.dp)
+          .height(150.dp)
           .clip(RoundedCornerShape(18.dp))
           .background(
             Brush.linearGradient(
@@ -165,7 +370,7 @@ fun MusicPlayerCard(
         // Rotating Vinyl Graphic
         Box(
           modifier = Modifier
-            .size(120.dp)
+            .size(110.dp)
             .rotate(if (isPlaying) rotationAngle else 0f)
             .clip(CircleShape)
             .background(
@@ -185,7 +390,7 @@ fun MusicPlayerCard(
           // Center Label
           Box(
             modifier = Modifier
-              .size(44.dp)
+              .size(40.dp)
               .clip(CircleShape)
               .background(
                 Brush.linearGradient(
@@ -198,7 +403,7 @@ fun MusicPlayerCard(
               imageVector = Icons.Outlined.MusicNote,
               contentDescription = null,
               tint = Color(0xFF1C1B1F),
-              modifier = Modifier.size(24.dp),
+              modifier = Modifier.size(20.dp),
             )
           }
         }
@@ -230,7 +435,7 @@ fun MusicPlayerCard(
         }
       }
 
-      Spacer(modifier = Modifier.height(16.dp))
+      Spacer(modifier = Modifier.height(14.dp))
 
       // Song Title & Prompt Description
       Text(
@@ -282,7 +487,7 @@ fun MusicPlayerCard(
         )
       }
 
-      Spacer(modifier = Modifier.height(16.dp))
+      Spacer(modifier = Modifier.height(14.dp))
 
       // Main Play/Pause Control Button Row
       Row(
@@ -292,7 +497,7 @@ fun MusicPlayerCard(
       ) {
         Box(
           modifier = Modifier
-            .size(64.dp)
+            .size(60.dp)
             .clip(CircleShape)
             .background(
               Brush.linearGradient(
@@ -305,12 +510,12 @@ fun MusicPlayerCard(
           IconButton(
             onClick = onTogglePlayPause,
             modifier = Modifier
-              .size(64.dp)
+              .size(60.dp)
               .testTag("music_play_pause_button"),
           ) {
             if (isBuffering) {
               CircularProgressIndicator(
-                modifier = Modifier.size(28.dp),
+                modifier = Modifier.size(26.dp),
                 color = Color.White,
                 strokeWidth = 3.dp,
               )
@@ -319,14 +524,14 @@ fun MusicPlayerCard(
                 imageVector = if (isPlaying) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
                 contentDescription = if (isPlaying) "Pause" else "Play",
                 tint = Color.White,
-                modifier = Modifier.size(36.dp),
+                modifier = Modifier.size(34.dp),
               )
             }
           }
         }
       }
 
-      Spacer(modifier = Modifier.height(20.dp))
+      Spacer(modifier = Modifier.height(18.dp))
 
       // Bottom Action Buttons: Save, Share, Generate Again
       Row(
@@ -394,6 +599,13 @@ fun MusicPlayerCard(
       }
     }
   }
+}
+
+private fun formatSeconds(seconds: Float): String {
+  val totalSeconds = seconds.toLong().coerceAtLeast(0)
+  val minutes = totalSeconds / 60
+  val remSeconds = totalSeconds % 60
+  return "%02d:%02d".format(minutes, remSeconds)
 }
 
 private fun formatMillis(millis: Long): String {

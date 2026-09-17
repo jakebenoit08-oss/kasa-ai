@@ -12,3 +12,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 *.log
+serviceAccountKey.json
+*service_account*.json
+*service-account*.json
+*firebase-adminsdk*.json

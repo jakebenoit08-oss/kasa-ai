@@ -229,6 +229,19 @@ class FirebaseAuthServiceImpl(
     }
   }
 
+  override suspend fun getIdToken(forceRefresh: Boolean): String? = withContext(ioDispatcher) {
+    val auth = firebaseAuth ?: return@withContext null
+    val user = auth.currentUser ?: return@withContext null
+    try {
+      val result = user.getIdToken(forceRefresh).awaitTask()
+      result.token
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Throwable) {
+      null
+    }
+  }
+
   private fun FirebaseUser.toUserProfile(): UserProfile {
     val emailPrefix = this.email?.substringBefore("@")?.replaceFirstChar { it.uppercase() }
     val display = this.displayName?.takeIf { it.isNotBlank() } ?: emailPrefix ?: "KASA Member"
