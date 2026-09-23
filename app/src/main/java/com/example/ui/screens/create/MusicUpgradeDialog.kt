@@ -66,7 +66,10 @@ fun MusicUpgradeDialog(
   onSelectPlan: (planId: String) -> Unit,
   onVerifyPayment: (reference: String?) -> Unit,
 ) {
-  var selectedPlan by remember { mutableStateOf("pro") }
+  val userTier = credits?.tier?.lowercase() ?: "free"
+  var selectedPlan by remember(userTier) {
+    mutableStateOf(if (userTier == "plus") "pro" else "plus")
+  }
 
   Dialog(
     onDismissRequest = onDismiss,
@@ -109,12 +112,12 @@ fun MusicUpgradeDialog(
             Spacer(modifier = Modifier.width(12.dp))
             Column {
               Text(
-                text = "KASA AI Subscription",
+                text = "KASA AI Premium",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
               )
               Text(
-                text = "Music Credits & Studio Access",
+                text = "Get more from KASA.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
               )
@@ -135,8 +138,14 @@ fun MusicUpgradeDialog(
         Spacer(modifier = Modifier.height(16.dp))
 
         // Current Status Card
+        val userTier = credits?.tier?.lowercase() ?: "free"
+        val isOwner = credits?.isOwner == true
+        val isPlus = !isOwner && userTier == "plus"
+        val isPro = !isOwner && userTier == "pro"
+        val isFree = !isOwner && !isPlus && !isPro
+
         Card(
-          modifier = Modifier.fillMaxWidth(),
+          modifier = Modifier.fillMaxWidth().testTag("music_current_status_card"),
           shape = RoundedCornerShape(14.dp),
           colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
@@ -157,9 +166,9 @@ fun MusicUpgradeDialog(
               )
               Text(
                 text = when {
-                  credits?.isOwner == true -> "Owner Access"
-                  credits?.tier == "pro" -> "KASA Pro"
-                  credits?.tier == "plus" -> "KASA Plus"
+                  isOwner -> "Owner Access"
+                  isPro -> "KASA Pro"
+                  isPlus -> "KASA Plus"
                   else -> "Free Tier"
                 },
                 style = MaterialTheme.typography.bodyLarge,
@@ -168,9 +177,9 @@ fun MusicUpgradeDialog(
             }
 
             val badgeText = when {
-              credits?.isOwner == true -> "Unlimited"
-              credits != null -> "${credits.remaining} credits left"
-              else -> "1 credit / cycle"
+              isOwner -> "Unlimited"
+              credits != null -> "${credits.remaining} / ${credits.limit} left"
+              else -> "1 credit / 30 days"
             }
             KasaBadge(
               text = badgeText,
@@ -182,10 +191,10 @@ fun MusicUpgradeDialog(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        if (credits?.isOwner == true) {
-          // Owner notice
+        if (isOwner) {
+          // Owner notice: permanent unrestricted access, do not push to purchase
           Card(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().testTag("music_owner_access_card"),
             shape = RoundedCornerShape(14.dp),
             colors = CardDefaults.cardColors(
               containerColor = Color(0xFFD4AF37).copy(alpha = 0.15f),
@@ -202,36 +211,66 @@ fun MusicUpgradeDialog(
                 modifier = Modifier.size(24.dp),
               )
               Spacer(modifier = Modifier.width(12.dp))
-              Text(
-                text = "Your account has permanent Owner Access. All KASA Music Studio and AI capabilities are unrestricted.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-              )
+              Column {
+                Text(
+                  text = "Owner Access • Unlimited",
+                  style = MaterialTheme.typography.titleSmall,
+                  fontWeight = FontWeight.Bold,
+                  color = Color(0xFF8A6D00),
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                  text = "Your account has permanent developer & owner access. All music generation and AI capabilities are unrestricted.",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurface,
+                )
+              }
             }
           }
           Spacer(modifier = Modifier.height(16.dp))
         } else {
           // Plan Selector
           Text(
-            text = "Select a Monthly Plan",
+            text = "Select a Plan",
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
           )
           Spacer(modifier = Modifier.height(8.dp))
 
-          // PLUS PLAN CARD
+          // FREE PLAN CARD
           PlanCard(
-            title = "KASA Plus",
-            price = "GH₵ 49",
-            period = "per month",
-            creditsText = "5 KASA Music Generations",
+            title = "FREE",
+            price = "GH₵ 0",
+            period = "default plan",
+            creditsText = "1 music generation per 30 days",
             features = listOf(
-              "5 AI Music generations (dual variations)",
-              "Twi, Fante, Ga, Ewe & English vocals",
+              "1 AI music generation per 30-day cycle",
+              "Dual song variations per prompt",
               "Standard generation queue",
             ),
+            isSelected = selectedPlan == "free",
+            badge = if (isFree) "Current Plan" else null,
+            onClick = { selectedPlan = "free" },
+            testTag = "music_plan_free",
+          )
+
+          Spacer(modifier = Modifier.height(10.dp))
+
+          // PLUS PLAN CARD
+          PlanCard(
+            title = "PLUS",
+            price = "GH₵ 49",
+            period = "per month",
+            creditsText = "5 music generations per 30 days",
+            features = listOf(
+              "5 AI music generations per 30 days",
+              "Dual song variations per prompt",
+              "Higher allowance than Free (5 vs 1)",
+              "Twi, Fante, Ga, Ewe & English vocals",
+              "Highlife, Afrobeats, Gospel & modern genres",
+            ),
             isSelected = selectedPlan == "plus",
-            badge = null,
+            badge = if (isPlus) "Current Plan" else null,
             onClick = { selectedPlan = "plus" },
             testTag = "music_plan_plus",
           )
@@ -240,18 +279,19 @@ fun MusicUpgradeDialog(
 
           // PRO PLAN CARD
           PlanCard(
-            title = "KASA Pro",
+            title = "PRO",
             price = "GH₵ 99",
             period = "per month",
-            creditsText = "15 KASA Music Generations",
+            creditsText = "15 music generations per 30 days",
             features = listOf(
-              "15 AI Music generations (dual variations)",
+              "Everything in Plus",
+              "15 AI music generations per 30 days",
               "Priority fast-track generation queue",
-              "Full commercial music rights",
-              "Twi, Fante, Ga, Ewe & English vocals",
+              "Full commercial music use rights",
+              "Advanced prompt engineering & styles",
             ),
             isSelected = selectedPlan == "pro",
-            badge = "Most Popular",
+            badge = if (isPro) "Current Plan" else if (!isPlus) "Most Popular" else null,
             onClick = { selectedPlan = "pro" },
             testTag = "music_plan_pro",
           )
@@ -277,10 +317,29 @@ fun MusicUpgradeDialog(
             Spacer(modifier = Modifier.height(12.dp))
           }
 
-          // Checkout Action Button
+          // Dynamic CTA Button
+          val isFreePlanSelected = selectedPlan == "free"
+          val isCurrentPlanSelected = (isFree && selectedPlan == "free") ||
+            (isPlus && selectedPlan == "plus") ||
+            (isPro && selectedPlan == "pro")
+
+          val ctaText = when {
+            isPro -> "Pro Active • 15 credits / cycle"
+            isCurrentPlanSelected -> "Current Plan"
+            selectedPlan == "plus" -> "Upgrade to Plus — GH₵49/mo"
+            selectedPlan == "pro" -> "Upgrade to Pro — GH₵99/mo"
+            else -> "Select a Plan"
+          }
+
+          val isCtaEnabled = !isUpgrading && !isCurrentPlanSelected && !isFreePlanSelected && !isPro
+
           Button(
-            onClick = { onSelectPlan(selectedPlan) },
-            enabled = !isUpgrading,
+            onClick = {
+              if (selectedPlan == "plus" || selectedPlan == "pro") {
+                onSelectPlan(selectedPlan)
+              }
+            },
+            enabled = isCtaEnabled,
             modifier = Modifier
               .fillMaxWidth()
               .height(50.dp)
@@ -289,6 +348,8 @@ fun MusicUpgradeDialog(
             colors = ButtonDefaults.buttonColors(
               containerColor = Color(0xFFD4AF37),
               contentColor = Color(0xFF1C1B1F),
+              disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+              disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
             ),
           ) {
             if (isUpgrading) {
@@ -300,14 +361,16 @@ fun MusicUpgradeDialog(
               Spacer(modifier = Modifier.width(10.dp))
               Text("Processing...")
             } else {
-              Icon(
-                imageVector = Icons.Outlined.Lock,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-              )
-              Spacer(modifier = Modifier.width(8.dp))
+              if (isCtaEnabled) {
+                Icon(
+                  imageVector = Icons.Outlined.Lock,
+                  contentDescription = null,
+                  modifier = Modifier.size(18.dp),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+              }
               Text(
-                text = "Pay ${if (selectedPlan == "pro") "GH₵99" else "GH₵49"} with Paystack",
+                text = ctaText,
                 fontWeight = FontWeight.Bold,
               )
             }

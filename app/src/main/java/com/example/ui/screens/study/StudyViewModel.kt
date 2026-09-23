@@ -38,6 +38,7 @@ class StudyViewModel(
 
   private var currentUser: UserProfile? = null
   private var progressCollectJob: Job? = null
+  private var lastFailedOperation: (() -> Unit)? = null
 
   init {
     viewModelScope.launch {
@@ -93,6 +94,7 @@ class StudyViewModel(
   }
 
   fun teachTopic(customTopic: String? = null) {
+    lastFailedOperation = { teachTopic(customTopic) }
     val topic = (customTopic ?: _uiState.value.topicInput).trim()
     if (topic.isBlank()) {
       _uiState.update { it.copy(errorMessage = "Please enter or select a topic to study.") }
@@ -142,6 +144,7 @@ class StudyViewModel(
   }
 
   fun sendFollowUp(prefilledQuery: String? = null) {
+    lastFailedOperation = { sendFollowUp(prefilledQuery) }
     val query = (prefilledQuery ?: _uiState.value.followUpInput).trim()
     val lesson = _uiState.value.currentLesson
     if (query.isBlank() || lesson == null) return
@@ -251,6 +254,7 @@ class StudyViewModel(
   }
 
   fun startQuiz() {
+    lastFailedOperation = { startQuiz() }
     val topic = _uiState.value.quizTopic.trim()
     if (topic.isBlank()) {
       _uiState.update { it.copy(errorMessage = "Please specify a topic for the quiz.") }
@@ -440,6 +444,11 @@ class StudyViewModel(
         _uiState.update { it.copy(selectedHistoricalSession = null) }
       }
     }
+  }
+
+  fun retry() {
+    _uiState.update { it.copy(errorMessage = null) }
+    lastFailedOperation?.invoke()
   }
 
   fun clearErrorMessage() {

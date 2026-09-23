@@ -153,7 +153,9 @@ fun KasaNavGraph(
     }
 
     composable(Screen.Study.route) {
-      val viewModel = StudyViewModel(userRepository, studyRepository)
+      val viewModel = androidx.compose.runtime.remember {
+        StudyViewModel(userRepository, studyRepository)
+      }
       StudyScreen(
         viewModel = viewModel,
         onNavigateToSettings = {
@@ -180,6 +182,9 @@ fun KasaNavGraph(
           navController.navigate(Screen.Auth.route) {
             popUpTo(0) { inclusive = true }
           }
+        },
+        onNavigateToPlans = {
+          navController.navigate(Screen.Create.route)
         },
       )
     }

@@ -195,6 +195,7 @@ fun StudyScreen(
         ErrorBanner(
           message = uiState.errorMessage!!,
           onDismiss = { viewModel.clearErrorMessage() },
+          onRetry = { viewModel.retry() },
         )
       }
 
@@ -521,7 +522,7 @@ private fun TopicComposerCard(
         onValueChange = onTopicInputChange,
         placeholder = {
           Text(
-            text = "Enter a topic (e.g. 'Quadratic Equations', 'Photosynthesis')...",
+            text = "Enter a topic or question (e.g. 'Quadratic Equations', 'Tro-tro motion & Newton laws', 'Photosynthesis')...",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
           )
@@ -596,7 +597,7 @@ private fun TopicComposerCard(
       ) {
         Icon(imageVector = Icons.Outlined.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
         Spacer(modifier = Modifier.width(8.dp))
-        Text(text = "Teach Me This Topic", fontWeight = FontWeight.SemiBold)
+        Text(text = "Teach Me This / Ask KASA", fontWeight = FontWeight.SemiBold)
       }
     }
   }
@@ -1998,7 +1999,11 @@ private fun GeneratingCard(title: String, subtitle: String) {
 }
 
 @Composable
-private fun ErrorBanner(message: String, onDismiss: () -> Unit) {
+private fun ErrorBanner(
+  message: String,
+  onDismiss: () -> Unit,
+  onRetry: (() -> Unit)? = null,
+) {
   Card(
     modifier = Modifier
       .fillMaxWidth()
@@ -2028,6 +2033,24 @@ private fun ErrorBanner(message: String, onDismiss: () -> Unit) {
         color = MaterialTheme.colorScheme.onErrorContainer,
         modifier = Modifier.weight(1f),
       )
+      if (onRetry != null) {
+        OutlinedButton(
+          onClick = onRetry,
+          modifier = Modifier
+            .height(32.dp)
+            .testTag("study_retry_button"),
+          contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+        ) {
+          Icon(
+            imageVector = Icons.Outlined.Refresh,
+            contentDescription = null,
+            modifier = Modifier.size(14.dp),
+          )
+          Spacer(modifier = Modifier.width(4.dp))
+          Text("Retry", style = MaterialTheme.typography.labelSmall)
+        }
+        Spacer(modifier = Modifier.width(4.dp))
+      }
       IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
         Icon(
           imageVector = Icons.Outlined.Clear,

@@ -107,13 +107,16 @@ class GeminiStudyAIService(
 
   private fun extractJsonPayload(raw: String): String {
     var cleaned = raw.trim()
-    if (cleaned.startsWith("```json")) {
-      cleaned = cleaned.removePrefix("```json").trim()
-    } else if (cleaned.startsWith("```")) {
-      cleaned = cleaned.removePrefix("```").trim()
-    }
-    if (cleaned.endsWith("```")) {
-      cleaned = cleaned.removeSuffix("```").trim()
+    val codeBlockRegex = Regex("```(?:json)?([\\s\\S]*?)```", RegexOption.IGNORE_CASE)
+    val match = codeBlockRegex.find(cleaned)
+    if (match != null) {
+      cleaned = match.groupValues[1].trim()
+    } else {
+      val firstBrace = cleaned.indexOf('{')
+      val lastBrace = cleaned.lastIndexOf('}')
+      if (firstBrace != -1 && lastBrace > firstBrace) {
+        cleaned = cleaned.substring(firstBrace, lastBrace + 1).trim()
+      }
     }
     return cleaned
   }
@@ -161,25 +164,47 @@ class GeminiStudyAIService(
         return@withContext AppResult.Error(AppError.AiEngineError("No lesson content received from Gemini."))
       }
 
-      val json = extractJsonPayload(text)
-      val adapter = moshi.adapter(LessonJsonDto::class.java)
-      val parsed = adapter.fromJson(json)
-        ?: return@withContext AppResult.Error(AppError.AiEngineError("Could not parse lesson format. Please try again."))
+      val parsed: LessonJsonDto? = try {
+        val json = extractJsonPayload(text)
+        val adapter = moshi.adapter(LessonJsonDto::class.java)
+        adapter.fromJson(json)
+      } catch (e: Exception) {
+        null
+      }
 
-      val lesson = StudyLesson(
-        id = "lesson_" + UUID.randomUUID().toString().take(8),
-        subject = subject,
-        topic = topic,
-        educationLevel = level,
-        summary = parsed.summary.orEmpty().ifBlank { "Core concepts and principles of $topic." },
-        detailedExplanation = parsed.detailedExplanation.orEmpty().ifBlank { "Detailed explanation for $topic." },
-        examples = parsed.examples.orEmpty().ifEmpty { listOf("Key practical application of $topic in everyday life.") },
-        keyPoints = parsed.keyPoints.orEmpty().ifEmpty { listOf("Master the fundamental definitions and core formulas.") },
-        examPointers = parsed.examPointers.orEmpty().ifEmpty { listOf("Carefully read question requirements and verify units in final answers.") },
-        suggestedFollowUps = parsed.suggestedFollowUps.orEmpty().ifEmpty {
-          listOf("Make it simpler", "Give another example", "Explain step-by-step")
-        },
-      )
+      val lesson = if (parsed != null && (!parsed.detailedExplanation.isNullOrBlank() || !parsed.summary.isNullOrBlank())) {
+        StudyLesson(
+          id = "lesson_" + UUID.randomUUID().toString().take(8),
+          subject = subject,
+          topic = topic,
+          educationLevel = level,
+          summary = parsed.summary.orEmpty().ifBlank { "Core concepts and principles of $topic." },
+          detailedExplanation = parsed.detailedExplanation.orEmpty().ifBlank { "Detailed explanation for $topic." },
+          examples = parsed.examples.orEmpty().ifEmpty { listOf("Key practical application of $topic in Ghanaian context.") },
+          keyPoints = parsed.keyPoints.orEmpty().ifEmpty { listOf("Master the fundamental definitions and core formulas.") },
+          examPointers = parsed.examPointers.orEmpty().ifEmpty { listOf("Carefully read question requirements and verify units in final answers.") },
+          suggestedFollowUps = parsed.suggestedFollowUps.orEmpty().ifEmpty {
+            listOf("Make it simpler", "Give another example", "Explain step-by-step", "Test my understanding")
+          },
+        )
+      } else {
+        // Resilient fallback: Gemini returned conversational text or non-standard format
+        val cleanText = text.replace("```json", "").replace("```", "").trim()
+        val paragraphs = cleanText.split("\n\n").filter { it.isNotBlank() }
+        val summaryText = paragraphs.firstOrNull()?.take(280) ?: "Key educational concepts for $topic in $subject."
+        StudyLesson(
+          id = "lesson_" + UUID.randomUUID().toString().take(8),
+          subject = subject,
+          topic = topic,
+          educationLevel = level,
+          summary = summaryText,
+          detailedExplanation = cleanText,
+          examples = listOf("Practical application of $topic in everyday life and problem solving."),
+          keyPoints = listOf("Understand core definitions and underlying principles.", "Practice problem-solving step-by-step."),
+          examPointers = listOf("Pay close attention to keywords, formulas, and units required in WAEC/BECE/WASSCE exams."),
+          suggestedFollowUps = listOf("Make it simpler", "Give another example", "Explain step-by-step", "Test my understanding"),
+        )
+      }
 
       AppResult.Success(lesson)
     } catch (e: HttpException) {
@@ -323,10 +348,16 @@ class GeminiStudyAIService(
         return@withContext AppResult.Error(AppError.AiEngineError("No quiz questions generated by the AI model."))
       }
 
-      val json = extractJsonPayload(text)
-      val adapter = moshi.adapter(QuizResponseJsonDto::class.java)
-      val parsed = adapter.fromJson(json)
-        ?: return@withContext AppResult.Error(AppError.AiEngineError("Failed to parse quiz questions from AI response."))
+      val parsed: QuizResponseJsonDto? = try {
+        val json = extractJsonPayload(text)
+        val adapter = moshi.adapter(QuizResponseJsonDto::class.java)
+        adapter.fromJson(json)
+      } catch (e: Exception) {
+        null
+      }
+      if (parsed == null) {
+        return@withContext AppResult.Error(AppError.AiEngineError("Failed to parse quiz questions from AI response."))
+      }
 
       val rawQuestions = parsed.questions.orEmpty()
       if (rawQuestions.isEmpty()) {

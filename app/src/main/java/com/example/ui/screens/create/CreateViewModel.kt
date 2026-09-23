@@ -192,6 +192,7 @@ class CreateViewModel(
         _uiState.update { it.copy(activeUser = user) }
         loadHistoryForUser(user.id)
         loadMusicHistoryForUser(user.id)
+        refreshCredits(user.id)
       }
     }
   }

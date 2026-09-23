@@ -112,6 +112,7 @@ class KasaStudyCompanionTest {
     var lastLessonLevel: EducationLevel? = null
     var answerFollowUpCalls = 0
     var lastFollowUpQuery: String? = null
+    var lastFollowUpLesson: StudyLesson? = null
     var generateQuizCalls = 0
     var lastQuizCount: Int = 0
     var lastQuizDifficulty: QuizDifficulty? = null
@@ -152,6 +153,7 @@ class KasaStudyCompanionTest {
     ): AppResult<String> {
       answerFollowUpCalls++
       lastFollowUpQuery = userQuestion
+      lastFollowUpLesson = lesson
       return AppResult.Success("Simply put, think of the leaf like a solar-powered kitchen making food for the plant using sunlight, water, and air.")
     }
 
@@ -460,6 +462,168 @@ class KasaStudyCompanionTest {
     assertFalse(viewModel.uiState.value.isLoadingLesson)
     assertNull(viewModel.uiState.value.currentLesson)
     assertEquals("Network quota exceeded", viewModel.uiState.value.errorMessage)
+  }
+
+  @Test
+  fun `TEST 7 (Part 4) - Study Mode opens with default tabs and subjects`() = runTest {
+    val fakeUserRepo = FakeUserRepository()
+    val fakeDao = FakeStudySessionDao()
+    val fakeRepo = StudyRepositoryImpl(fakeDao)
+    val fakeService = FakeStudyAIService()
+
+    val viewModel = StudyViewModel(fakeUserRepo, fakeRepo, fakeService)
+
+    // Initial state: starts on LEARN tab
+    assertEquals(StudyTab.LEARN, viewModel.uiState.value.currentTab)
+    // Default level is JHS / BECE or SHS
+    assertNotNull(viewModel.uiState.value.selectedLevel)
+    // Core and elective subject catalog exists and has subjects
+    assertTrue(StudySubjectCatalog.CORE_SUBJECTS.isNotEmpty())
+    assertTrue(StudySubjectCatalog.ELECTIVE_SUBJECTS.isNotEmpty())
+    // Default selected subject is non-null
+    assertNotNull(viewModel.uiState.value.selectedSubject)
+  }
+
+  @Test
+  fun `TEST 8 (Part 4) - Subject and topic selection works`() = runTest {
+    val fakeUserRepo = FakeUserRepository()
+    val fakeDao = FakeStudySessionDao()
+    val fakeRepo = StudyRepositoryImpl(fakeDao)
+    val fakeService = FakeStudyAIService()
+
+    val viewModel = StudyViewModel(fakeUserRepo, fakeRepo, fakeService)
+
+    // Select Integrated Science
+    val intScience = StudySubjectCatalog.CORE_SUBJECTS.first { it.id == "integrated_science" }
+    viewModel.selectSubject(intScience)
+    assertEquals("Integrated Science", viewModel.uiState.value.selectedSubject.name)
+
+    // Custom topic typing
+    viewModel.updateTopicInput("Photosynthesis & Tro-tro motion")
+    assertEquals("Photosynthesis & Tro-tro motion", viewModel.uiState.value.topicInput)
+
+    // Sample topic selection
+    val sample = intScience.sampleTopics.first()
+    viewModel.selectSampleTopic(sample)
+    assertEquals(sample, viewModel.uiState.value.topicInput)
+  }
+
+  @Test
+  fun `TEST 9 (Part 4) - Study request reaches the real AI implementation`() = runTest {
+    val fakeUserRepo = FakeUserRepository()
+    val fakeDao = FakeStudySessionDao()
+    val fakeRepo = StudyRepositoryImpl(fakeDao)
+    val fakeService = FakeStudyAIService()
+
+    val viewModel = StudyViewModel(fakeUserRepo, fakeRepo, fakeService)
+    viewModel.selectLevel(EducationLevel.SHS)
+    viewModel.teachTopic("Ohm's Law in Ghanaian Grid")
+
+    assertEquals(1, fakeService.generateLessonCalls)
+    assertEquals("Ohm's Law in Ghanaian Grid", fakeService.lastLessonTopic)
+    assertEquals(EducationLevel.SHS, fakeService.lastLessonLevel)
+  }
+
+  @Test
+  fun `TEST 10 (Part 4) - AI response appears in Study Mode`() = runTest {
+    val fakeUserRepo = FakeUserRepository()
+    val fakeDao = FakeStudySessionDao()
+    val fakeRepo = StudyRepositoryImpl(fakeDao)
+    val fakeService = FakeStudyAIService()
+
+    val viewModel = StudyViewModel(fakeUserRepo, fakeRepo, fakeService)
+    viewModel.teachTopic("Calculus Differentiation")
+
+    val lesson = viewModel.uiState.value.currentLesson
+    assertNotNull(lesson)
+    assertEquals("Calculus Differentiation", lesson?.topic)
+    assertTrue(lesson?.summary?.isNotBlank() == true)
+    assertTrue(lesson?.detailedExplanation?.isNotBlank() == true)
+    assertTrue(lesson?.examples?.isNotEmpty() == true)
+    assertTrue(lesson?.keyPoints?.isNotEmpty() == true)
+    assertTrue(lesson?.examPointers?.isNotEmpty() == true)
+  }
+
+  @Test
+  fun `TEST 11 (Part 4) - Follow-up question preserves study context`() = runTest {
+    val fakeUserRepo = FakeUserRepository()
+    val fakeDao = FakeStudySessionDao()
+    val fakeRepo = StudyRepositoryImpl(fakeDao)
+    val fakeService = FakeStudyAIService()
+
+    val viewModel = StudyViewModel(fakeUserRepo, fakeRepo, fakeService)
+    viewModel.teachTopic("Electrolysis")
+    assertNotNull(viewModel.uiState.value.currentLesson)
+
+    // Send follow-up
+    viewModel.updateFollowUpInput("Give an everyday Ghanaian analogy")
+    viewModel.sendFollowUp()
+
+    assertEquals(1, fakeService.answerFollowUpCalls)
+    assertEquals("Give an everyday Ghanaian analogy", fakeService.lastFollowUpQuery)
+    assertEquals("Electrolysis", fakeService.lastFollowUpLesson?.topic)
+    // History contains both user prompt and assistant explanation
+    assertEquals(2, viewModel.uiState.value.followUpHistory.size)
+    assertEquals("user", viewModel.uiState.value.followUpHistory[0].role)
+    assertEquals("assistant", viewModel.uiState.value.followUpHistory[1].role)
+  }
+
+  @Test
+  fun `TEST 12 (Part 4) - Loading state works`() = runTest {
+    val fakeUserRepo = FakeUserRepository()
+    val fakeDao = FakeStudySessionDao()
+    val fakeRepo = StudyRepositoryImpl(fakeDao)
+    val fakeService = FakeStudyAIService()
+
+    val viewModel = StudyViewModel(fakeUserRepo, fakeRepo, fakeService)
+
+    // Before generation
+    assertFalse(viewModel.uiState.value.isLoadingLesson)
+    assertFalse(viewModel.uiState.value.isSendingFollowUp)
+
+    viewModel.teachTopic("Algebra")
+    // Upon completion
+    assertFalse(viewModel.uiState.value.isLoadingLesson)
+    assertNotNull(viewModel.uiState.value.currentLesson)
+  }
+
+  @Test
+  fun `TEST 13 (Part 4) - Error state works`() = runTest {
+    val fakeUserRepo = FakeUserRepository()
+    val fakeDao = FakeStudySessionDao()
+    val fakeRepo = StudyRepositoryImpl(fakeDao)
+    val fakeService = FakeStudyAIService().apply { shouldFail = true }
+
+    val viewModel = StudyViewModel(fakeUserRepo, fakeRepo, fakeService)
+    viewModel.teachTopic("Thermodynamics")
+
+    assertFalse(viewModel.uiState.value.isLoadingLesson)
+    assertNull(viewModel.uiState.value.currentLesson)
+    assertEquals("Network quota exceeded", viewModel.uiState.value.errorMessage)
+  }
+
+  @Test
+  fun `TEST 14 (Part 4) - Retry works`() = runTest {
+    val fakeUserRepo = FakeUserRepository()
+    val fakeDao = FakeStudySessionDao()
+    val fakeRepo = StudyRepositoryImpl(fakeDao)
+    val fakeService = FakeStudyAIService().apply { shouldFail = true }
+
+    val viewModel = StudyViewModel(fakeUserRepo, fakeRepo, fakeService)
+    viewModel.teachTopic("Vectors and Scalars")
+
+    // Failed initial run
+    assertEquals("Network quota exceeded", viewModel.uiState.value.errorMessage)
+    assertNull(viewModel.uiState.value.currentLesson)
+
+    // Fix backend and retry
+    fakeService.shouldFail = false
+    viewModel.retry()
+
+    // Error cleared and lesson loaded
+    assertNull(viewModel.uiState.value.errorMessage)
+    assertNotNull(viewModel.uiState.value.currentLesson)
+    assertEquals("Vectors and Scalars", viewModel.uiState.value.currentLesson?.topic)
   }
 
   @Test

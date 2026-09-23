@@ -39,6 +39,7 @@ import androidx.compose.material.icons.outlined.RecordVoiceOver
 import androidx.compose.material.icons.outlined.School
 import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.ShortText
+import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.Vibration
 import androidx.compose.material3.AlertDialog
@@ -69,6 +70,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -98,6 +100,7 @@ fun SettingsScreen(
   viewModel: SettingsViewModel,
   onNavigateBack: () -> Unit,
   onSignedOut: () -> Unit = {},
+  onNavigateToPlans: (() -> Unit)? = null,
   modifier: Modifier = Modifier,
 ) {
   val state by viewModel.uiState.collectAsState()
@@ -265,6 +268,98 @@ fun SettingsScreen(
                   )
                   Spacer(modifier = Modifier.width(6.dp))
                   Text(text = "Delete Account", style = MaterialTheme.typography.labelLarge)
+                }
+              }
+            }
+          }
+        }
+
+        // Section: Subscription & Premium Plans
+        item {
+          SectionHeader(title = "Subscription & Plans")
+        }
+
+        item {
+          val userEmail = state.user?.email.orEmpty().lowercase()
+          val isOwnerEmail = userEmail in listOf("powerkobbi9@gmail.com", "rabbiking713@gmail.com", "jakebenoit08@gmail.com")
+
+          KasaOutlinedCard(testTag = "settings_subscription_card") {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+              ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                  Box(
+                    modifier = Modifier
+                      .size(38.dp)
+                      .clip(CircleShape)
+                      .background(Color(0xFFD4AF37).copy(alpha = 0.2f)),
+                    contentAlignment = Alignment.Center,
+                  ) {
+                    Icon(
+                      imageVector = Icons.Outlined.Star,
+                      contentDescription = null,
+                      tint = Color(0xFFD4AF37),
+                      modifier = Modifier.size(20.dp),
+                    )
+                  }
+                  Spacer(modifier = Modifier.width(10.dp))
+                  Column {
+                    Text(
+                      text = "KASA Plan",
+                      style = MaterialTheme.typography.labelMedium,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                      text = if (isOwnerEmail) "Owner Access" else "Free Tier",
+                      style = MaterialTheme.typography.titleSmall,
+                      fontWeight = FontWeight.Bold,
+                    )
+                  }
+                }
+
+                KasaBadge(
+                  text = if (isOwnerEmail) "Unlimited" else "Free Active",
+                  containerColor = if (isOwnerEmail) Color(0xFFD4AF37).copy(alpha = 0.2f) else MaterialTheme.colorScheme.primaryContainer,
+                  contentColor = if (isOwnerEmail) Color(0xFF8A6D00) else MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+              }
+
+              Text(
+                text = if (isOwnerEmail) {
+                  "You have permanent unrestricted owner access across all KASA music and AI capabilities."
+                } else {
+                  "Upgrade to KASA Plus (GH₵49/mo) or Pro (GH₵99/mo) for up to 15 AI music generations, dual variations, and priority queues."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+
+              if (!isOwnerEmail && onNavigateToPlans != null) {
+                Button(
+                  onClick = onNavigateToPlans,
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp)
+                    .testTag("settings_upgrade_button"),
+                  shape = RoundedCornerShape(10.dp),
+                  colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFFD4AF37),
+                    contentColor = Color(0xFF1C1B1F),
+                  ),
+                ) {
+                  Icon(
+                    imageVector = Icons.Outlined.Star,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                  )
+                  Spacer(modifier = Modifier.width(8.dp))
+                  Text(
+                    text = "View Plans & Upgrades",
+                    fontWeight = FontWeight.Bold,
+                  )
                 }
               }
             }

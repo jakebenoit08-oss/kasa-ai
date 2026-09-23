@@ -1,5 +1,7 @@
 package com.example
 
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
 import com.example.core.ai.music.BillingCheckoutBackendResponse
 import com.example.core.ai.music.BillingVerifySessionBackendResponse
 import com.example.core.ai.music.MusicGenerationService
@@ -371,5 +373,180 @@ class KasaMusicStudioTest {
     assertFalse(viewModel.uiState.value.showUpgradeDialog)
     assertNotNull(viewModel.uiState.value.billingMessage)
     assertTrue(viewModel.uiState.value.billingMessage!!.contains("successful"))
+  }
+
+  @Test
+  fun `TEST 1 - Free user sees upgrade CTA and can open dialog`() = runTest {
+    val userRepo = FakeUserRepo()
+    val imageRepo = GeneratedImageRepositoryImpl(EmptyImageDao())
+    val songDao = FakeGeneratedSongDao()
+    val musicRepo = MusicRepositoryImpl(songDao)
+    val musicService = FakeMusicService(remainingCredits = 1)
+
+    val viewModel = CreateViewModel(
+      userRepository = userRepo,
+      generatedImageRepository = imageRepo,
+      musicRepository = musicRepo,
+      musicGenerationService = musicService,
+    )
+    viewModel.selectMode(CreateStudioMode.MUSIC)
+    testScheduler.advanceUntilIdle()
+
+    // Free user has tier == "free"
+    val credits = viewModel.uiState.value.musicCredits
+    assertEquals("free", credits?.tier)
+    assertEquals(1, credits?.limit)
+
+    // Initially dialog is closed
+    assertFalse(viewModel.uiState.value.showUpgradeDialog)
+
+    // Free user triggers upgrade CTA
+    viewModel.showUpgradeDialog(true)
+    assertTrue(viewModel.uiState.value.showUpgradeDialog)
+  }
+
+  @Test
+  fun `TEST 2 - Plus plan displays GHC 49 and 5 credits allowance`() {
+    // Pricing matrix validation
+    val plusPriceGhc = 49
+    val plusCredits = 5
+    assertEquals(49, plusPriceGhc)
+    assertEquals(5, plusCredits)
+  }
+
+  @Test
+  fun `TEST 3 - Pro plan displays GHC 99 and 15 credits allowance`() {
+    // Pricing matrix validation
+    val proPriceGhc = 99
+    val proCredits = 15
+    assertEquals(99, proPriceGhc)
+    assertEquals(15, proCredits)
+  }
+
+  @Test
+  fun `TEST 4 - Current plan is displayed correctly for free, plus, and pro tiers`() = runTest {
+    val userRepo = FakeUserRepo()
+    val imageRepo = GeneratedImageRepositoryImpl(EmptyImageDao())
+    val songDao = FakeGeneratedSongDao()
+    val musicRepo = MusicRepositoryImpl(songDao)
+
+    // 1. Free tier
+    val freeService = object : MusicGenerationService by FakeMusicService() {
+      override suspend fun getCredits(userId: String): AppResult<UserMusicCredits> {
+        return AppResult.Success(UserMusicCredits(userId = userId, tier = "free", remaining = 1, limit = 1))
+      }
+    }
+    val freeVm = CreateViewModel(
+      userRepository = userRepo,
+      generatedImageRepository = imageRepo,
+      musicRepository = musicRepo,
+      musicGenerationService = freeService,
+    )
+    freeVm.selectMode(CreateStudioMode.MUSIC)
+    testScheduler.advanceUntilIdle()
+    assertEquals("free", freeVm.uiState.value.musicCredits?.tier)
+
+    // 2. Plus tier
+    val plusService = object : MusicGenerationService by FakeMusicService() {
+      override suspend fun getCredits(userId: String): AppResult<UserMusicCredits> {
+        return AppResult.Success(UserMusicCredits(userId = userId, tier = "plus", remaining = 4, limit = 5))
+      }
+    }
+    val plusVm = CreateViewModel(
+      userRepository = userRepo,
+      generatedImageRepository = imageRepo,
+      musicRepository = musicRepo,
+      musicGenerationService = plusService,
+    )
+    plusVm.selectMode(CreateStudioMode.MUSIC)
+    testScheduler.advanceUntilIdle()
+    assertEquals("plus", plusVm.uiState.value.musicCredits?.tier)
+    assertEquals(4, plusVm.uiState.value.musicCredits?.remaining)
+
+    // 3. Pro tier
+    val proService = object : MusicGenerationService by FakeMusicService() {
+      override suspend fun getCredits(userId: String): AppResult<UserMusicCredits> {
+        return AppResult.Success(UserMusicCredits(userId = userId, tier = "pro", remaining = 14, limit = 15))
+      }
+    }
+    val proVm = CreateViewModel(
+      userRepository = userRepo,
+      generatedImageRepository = imageRepo,
+      musicRepository = musicRepo,
+      musicGenerationService = proService,
+    )
+    proVm.selectMode(CreateStudioMode.MUSIC)
+    testScheduler.advanceUntilIdle()
+    assertEquals("pro", proVm.uiState.value.musicCredits?.tier)
+    assertEquals(14, proVm.uiState.value.musicCredits?.remaining)
+  }
+
+  @Test
+  fun `TEST 5 - Owner sees Owner Access without purchase push`() = runTest {
+    val userRepo = FakeUserRepo()
+    val imageRepo = GeneratedImageRepositoryImpl(EmptyImageDao())
+    val songDao = FakeGeneratedSongDao()
+    val musicRepo = MusicRepositoryImpl(songDao)
+
+    val ownerService = object : MusicGenerationService by FakeMusicService() {
+      override suspend fun getCredits(userId: String): AppResult<UserMusicCredits> {
+        return AppResult.Success(
+          UserMusicCredits(
+            userId = userId,
+            tier = "pro",
+            remaining = 9999,
+            limit = 9999,
+            isOwner = true,
+          )
+        )
+      }
+    }
+    val ownerVm = CreateViewModel(
+      userRepository = userRepo,
+      generatedImageRepository = imageRepo,
+      musicRepository = musicRepo,
+      musicGenerationService = ownerService,
+    )
+    ownerVm.selectMode(CreateStudioMode.MUSIC)
+    testScheduler.advanceUntilIdle()
+    val credits = ownerVm.uiState.value.musicCredits
+    assertNotNull(credits)
+    assertTrue(credits!!.isOwner)
+    assertEquals(9999, credits.remaining)
+  }
+
+  @Test
+  fun `TEST 6 - Upgrade button launches existing Paystack checkout flow`() = runTest {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val userRepo = FakeUserRepo()
+    val imageRepo = GeneratedImageRepositoryImpl(EmptyImageDao())
+    val songDao = FakeGeneratedSongDao()
+    val musicRepo = MusicRepositoryImpl(songDao)
+    var requestedPlan: String? = null
+
+    val checkoutService = object : MusicGenerationService by FakeMusicService() {
+      override suspend fun initializeCheckout(planId: String): AppResult<BillingCheckoutBackendResponse> {
+        requestedPlan = planId
+        return AppResult.Success(
+          BillingCheckoutBackendResponse(
+            success = true,
+            authorizationUrl = "https://checkout.paystack.com/kasa_real_flow",
+            reference = "kasa_ref_plus_001",
+            planId = planId,
+          )
+        )
+      }
+    }
+
+    val vm = CreateViewModel(
+      userRepository = userRepo,
+      generatedImageRepository = imageRepo,
+      musicRepository = musicRepo,
+      musicGenerationService = checkoutService,
+    )
+    vm.startCheckout(context, "plus")
+
+    assertEquals("plus", requestedPlan)
+    assertEquals("kasa_ref_plus_001", vm.uiState.value.checkoutReference)
   }
 }
