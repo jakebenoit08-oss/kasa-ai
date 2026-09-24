@@ -16,6 +16,7 @@
 local.properties
 .env
 .env.*
+!.env.example
 server/.env
 server/credits_store.json
 node_modules/

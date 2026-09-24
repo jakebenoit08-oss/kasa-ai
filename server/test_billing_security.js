@@ -10,6 +10,7 @@ const crypto = require('crypto');
 const { isOwnerEmail } = require('./owner');
 const {
   PLANS,
+  initializeCheckout,
   verifyWebhookSignature,
   executeAtomicGrant,
   executeRefundOrChargeback,
@@ -20,6 +21,12 @@ const { getDb, setUseMock, getMockStore } = require('./firestore');
 setUseMock(true);
 
 async function runTests() {
+  const store = getMockStore();
+  store.entitlements = {};
+  store.payments = {};
+  store.subscriptions = {};
+  store.credit_grants = {};
+
   console.log('--- Starting KASA AI Billing & Security Verification Suite ---');
 
   // Test 1: Owner Email Verification
@@ -106,7 +113,6 @@ async function runTests() {
   assert.strictEqual(result1.entitlement.musicCredits, 5);
 
   // Check store
-  const store = getMockStore();
   assert.strictEqual(store.payments[testRef].status, 'success');
   assert.strictEqual(store.entitlements['uid_test_customer_1'].musicCredits, 5);
 
@@ -159,7 +165,30 @@ async function runTests() {
   assert.strictEqual(refreshedEnt.musicCredits, 1); // Reset with 1 free credit for new cycle
   console.log('   PASS: Expired subscriptions automatically lapse to free tier and receive 1 renewal credit.');
 
-  console.log('\n>>> ALL 8 BILLING & SECURITY VERIFICATION SUITE TESTS PASSED SUCCESSFULLY! <<<');
+  // Test 9: initializeCheckout Validation and Non-crashing Resilience
+  console.log('9. Testing Checkout Initialization Validation...');
+  try {
+    await initializeCheckout('uid_test_9', 'user@example.com', 'invalid_plan_xyz');
+    assert.fail('Should have rejected invalid plan');
+  } catch (err) {
+    assert.strictEqual(err.statusCode, 400);
+    assert.strictEqual(err.code, 'INVALID_PLAN');
+  }
+
+  // Missing secret key returns 503
+  const savedKey = process.env.PAYSTACK_SECRET_KEY;
+  delete process.env.PAYSTACK_SECRET_KEY;
+  try {
+    await initializeCheckout('uid_test_9', 'user@example.com', 'plus');
+    assert.fail('Should have failed when secret key is missing');
+  } catch (err) {
+    assert.strictEqual(err.statusCode, 503);
+    assert.strictEqual(err.code, 'BILLING_NOT_CONFIGURED');
+  }
+  process.env.PAYSTACK_SECRET_KEY = savedKey;
+  console.log('   PASS: Checkout rejects invalid plans (400) and reports missing Paystack key (503).');
+
+  console.log('\n>>> ALL 9 BILLING & SECURITY VERIFICATION SUITE TESTS PASSED SUCCESSFULLY! <<<');
 }
 
 runTests().catch(err => {

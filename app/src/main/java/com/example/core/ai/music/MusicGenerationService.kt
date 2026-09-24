@@ -141,20 +141,30 @@ class KasaMusicGenerationService(
   private fun classifyHttpError(statusCode: Int, errorBody: String?): AppError {
     val body = errorBody ?: ""
     Log.w("KasaMusicService", "HTTP error received: code=$statusCode, body=$body")
+    val backendMessage = try {
+      if (body.trimStart().startsWith("{")) {
+        org.json.JSONObject(body).optString("message").takeIf { it.isNotBlank() }
+      } else null
+    } catch (_: Exception) {
+      null
+    }
+
     return when (statusCode) {
       400 -> AppError.ValidationError(
-        if (body.contains("MISSING_PROMPT", ignoreCase = true)) "Please provide a description for the song."
+        backendMessage ?: if (body.contains("MISSING_PROMPT", ignoreCase = true)) "Please provide a description for the song."
         else "Invalid music generation request (HTTP 400). Please check your prompt."
       )
       401 -> AppError.Unauthorized(
-        if (body.contains("UNAUTHORIZED", ignoreCase = true) || body.contains("INVALID_TOKEN", ignoreCase = true)) {
+        backendMessage ?: if (body.contains("UNAUTHORIZED", ignoreCase = true) || body.contains("INVALID_TOKEN", ignoreCase = true)) {
           "Please sign in to your KASA account to use AI Music."
         } else {
           "Music service authentication error (HTTP 401). Please verify your account."
         }
       )
       403 -> {
-        if (body.contains("CREDIT_LIMIT_REACHED", ignoreCase = true) || body.contains("INSUFFICIENT_CREDITS", ignoreCase = true)) {
+        if (backendMessage != null) {
+          AppError.ServiceUnavailable(backendMessage)
+        } else if (body.contains("CREDIT_LIMIT_REACHED", ignoreCase = true) || body.contains("INSUFFICIENT_CREDITS", ignoreCase = true)) {
           AppError.ServiceUnavailable("You have 0 KASA Music Credits remaining for this cycle.")
         } else if (body.contains("FORBIDDEN", ignoreCase = true)) {
           AppError.Unauthorized("You do not have permission to access this music task.")
@@ -163,16 +173,18 @@ class KasaMusicGenerationService(
         }
       }
       429 -> AppError.ServiceUnavailable(
-        "Music service rate limit reached (HTTP 429). Please wait a moment before trying again."
+        backendMessage ?: "Music service rate limit reached (HTTP 429). Please wait a moment before trying again."
       )
       500 -> AppError.AiEngineError(
-        "Music engine encountered an internal server error (HTTP 500). Please try again shortly."
+        backendMessage ?: "Music engine encountered an internal server error (HTTP 500). Please try again shortly."
       )
       502 -> AppError.AiEngineError(
-        "Bad gateway from music provider (HTTP 502). Please try again shortly."
+        backendMessage ?: "Bad gateway from music provider (HTTP 502). Please try again shortly."
       )
       503 -> {
-        if (body.contains("BACKEND_NOT_CONFIGURED", ignoreCase = true)) {
+        if (backendMessage != null) {
+          AppError.ServiceUnavailable(backendMessage)
+        } else if (body.contains("BACKEND_NOT_CONFIGURED", ignoreCase = true)) {
           AppError.ConfigurationError(
             "AIMusicAPI key is not configured on the KASA backend. Please configure AIMUSIC_API_KEY in the backend environment or .env file."
           )
@@ -180,7 +192,7 @@ class KasaMusicGenerationService(
           AppError.ServiceUnavailable("KASA Music backend is temporarily unavailable (HTTP 503). Please try again later.")
         }
       }
-      else -> AppError.AiEngineError("Music generation failed with HTTP $statusCode. Please try again.")
+      else -> AppError.AiEngineError(backendMessage ?: "Music generation failed with HTTP $statusCode. Please try again.")
     }
   }
 

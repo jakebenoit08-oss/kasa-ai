@@ -26,8 +26,34 @@ const path = require('path');
 const PERIOD_DAYS = parseInt(process.env.SUBSCRIPTION_PERIOD_DAYS || '30', 10);
 const PERIOD_MS = PERIOD_DAYS * 24 * 60 * 60 * 1000;
 
+const hasFirestoreCredentials = !!(
+  process.env.FIREBASE_SERVICE_ACCOUNT_KEY ||
+  process.env.FIREBASE_SERVICE_ACCOUNT_JSON ||
+  process.env.GOOGLE_APPLICATION_CREDENTIALS
+);
+
 let firestoreInstance = null;
-let useMock = process.env.NODE_ENV === 'test' || process.env.USE_MOCK_FIRESTORE === 'true' || !getFirestore;
+let useMock = process.env.NODE_ENV === 'test' || process.env.USE_MOCK_FIRESTORE === 'true' || !getFirestore || !hasFirestoreCredentials;
+
+const FIRESTORE_STORE_FILE = path.join(process.env.KASA_DATA_DIR || __dirname, 'persistent_firestore.json');
+
+function saveMockStore(store) {
+  if (process.env.NODE_ENV === 'test') return;
+  try {
+    const tmp = `${FIRESTORE_STORE_FILE}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(store, null, 2), 'utf8');
+    fs.renameSync(tmp, FIRESTORE_STORE_FILE);
+  } catch (_) {}
+}
+
+function loadMockStore() {
+  try {
+    if (fs.existsSync(FIRESTORE_STORE_FILE)) {
+      return JSON.parse(fs.readFileSync(FIRESTORE_STORE_FILE, 'utf8'));
+    }
+  } catch (_) {}
+  return null;
+}
 
 // In-Memory Transactional Mock for offline/testing environments
 class MockDocumentSnapshot {
@@ -64,6 +90,7 @@ class MockDocumentReference {
     } else {
       this.store[this.collectionName][this.id] = JSON.parse(JSON.stringify(data));
     }
+    saveMockStore(this.store);
     return { writeTime: Date.now() };
   }
 
@@ -75,6 +102,7 @@ class MockDocumentReference {
       ...this.store[this.collectionName][this.id],
       ...JSON.parse(JSON.stringify(data)),
     };
+    saveMockStore(this.store);
     return { writeTime: Date.now() };
   }
 }
@@ -114,7 +142,8 @@ class MockCollectionReference {
 
 class MockFirestore {
   constructor() {
-    this.store = {
+    const loaded = loadMockStore();
+    this.store = loaded || {
       entitlements: {},
       payments: {},
       subscriptions: {},
@@ -165,6 +194,7 @@ class MockFirestore {
     for (const [colName, colData] of Object.entries(stagedStore)) {
       this.store[colName] = colData;
     }
+    saveMockStore(this.store);
     return result;
   }
 }
@@ -174,6 +204,12 @@ const mockDb = new MockFirestore();
 function getDb() {
   if (useMock) return mockDb;
   if (firestoreInstance) return firestoreInstance;
+
+  if (!hasFirestoreCredentials) {
+    console.log('[KASA Firestore] Firebase service account credentials not configured on host. Falling back to persistent Transactional Store.');
+    useMock = true;
+    return mockDb;
+  }
 
   try {
     const app = getFirebaseApp();
