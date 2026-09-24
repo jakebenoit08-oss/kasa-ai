@@ -719,7 +719,7 @@ class CreateViewModel(
         putExtra(Intent.EXTRA_SUBJECT, "Song: ${song.title}")
         putExtra(
           Intent.EXTRA_TEXT,
-          "🎵 Listen to '${song.title}' created with KASA Create Studio!\n\nAudio: ${song.audioUrl}\n\nPrompt: \"${song.prompt}\""
+          "🎵 Listen to '${song.title}' created with KASA Music Studio!\n\nAudio: ${song.audioUrl}\n\nPrompt: \"${song.prompt}\""
         )
       }
       val chooser = Intent.createChooser(shareIntent, "Share Song")

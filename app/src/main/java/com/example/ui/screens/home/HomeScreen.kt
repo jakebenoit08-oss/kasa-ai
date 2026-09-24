@@ -22,6 +22,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material.icons.outlined.School
 import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Settings
@@ -163,10 +164,10 @@ fun HomeScreen(
 
         item {
           FutureCapabilityItem(
-            title = "Creative Studio",
-            subtitle = "Cultural image, wallpaper, and multimodal creative generation",
+            title = "Music Studio",
+            subtitle = "Ghanaian Afrobeats, Highlife, Gospel, and Drill song generation",
             phaseTag = "Live",
-            icon = Icons.Outlined.AutoAwesome,
+            icon = Icons.Outlined.MusicNote,
             onClick = { onNavigateToScreen(Screen.Create) },
             testTag = "capability_create_card",
           )

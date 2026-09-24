@@ -7,6 +7,7 @@ import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material.icons.outlined.School
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -22,7 +23,7 @@ sealed class Screen(
   data object Home : Screen("home", "Home", Icons.Outlined.Home)
   data object Chat : Screen("chat", "Chat", Icons.AutoMirrored.Outlined.Chat)
   data object Live : Screen("live", "Live", Icons.Outlined.Mic)
-  data object Create : Screen("create", "Create", Icons.Outlined.AutoAwesome)
+  data object Create : Screen("create", "Music", Icons.Outlined.MusicNote)
   data object Study : Screen("study", "Study", Icons.Outlined.School)
   data object Settings : Screen("settings", "Settings", Icons.Outlined.Settings)
 
