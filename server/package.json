@@ -9,6 +9,7 @@
     "dev": "node server.js"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.17.0",
     "firebase-admin": "^13.0.0"
   },
   "engines": {
