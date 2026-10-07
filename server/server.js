@@ -116,94 +116,78 @@ function getApiKey() {
 }
 
 // ==========================================
-// GEMINI MULTI-LAYER SERVICE
-// Supports both @google/generative-ai SDK and Native REST API
+// GEMINI DUAL-MODE SERVICE
+// Seamlessly handles standard AIza keys AND AQ. OAuth Bearer Tokens
 // ==========================================
-let GoogleGenerativeAIClass = null;
-try {
-  const sdk = require('@google/generative-ai');
-  GoogleGenerativeAIClass = sdk.GoogleGenerativeAI;
-} catch (e) {
-  // SDK optional; REST fallback works natively without dependencies
-}
-
-async function executeGeminiChat(apiKey, systemInstruction, userMessage, conversationHistory = []) {
-  const modelsToTry = ['gemini-3.8-flash', 'gemini-flash-latest'];
+async function executeGeminiChat(token, systemInstruction, userMessage, conversationHistory = []) {
+  const modelsToTry = ['gemini-2.5-flash', 'gemini-2.0-flash'];
 
   // Normalize conversation history format
-  const sanitizedHistory = (conversationHistory || []).slice(-8).map(h => ({
+  const sanitizedHistory = (conversationHistory || []).slice(-6).map(h => ({
     role: (h.role === 'assistant' || h.role === 'model') ? 'model' : 'user',
-    parts: [{ text: (h.text || h.content || '').slice(0, 2000) }]
+    parts: [{ text: (h.text || h.content || '').slice(0, 1500) }]
   })).filter(h => h.parts[0].text.length > 0);
 
-  // 1. Try with GoogleGenerativeAI SDK if installed
-  if (GoogleGenerativeAIClass) {
-    try {
-      const genAI = new GoogleGenerativeAIClass(apiKey);
-      for (const modelName of modelsToTry) {
-        try {
-          const model = genAI.getGenerativeModel({
-            model: modelName,
-            systemInstruction: systemInstruction,
-            generationConfig: { temperature: 0.7, maxOutputTokens: 1000 }
-          });
-          const chat = model.startChat({ history: sanitizedHistory });
-          const result = await Promise.race([
-            chat.sendMessage(userMessage),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('SDK_TIMEOUT')), 20000))
-          ]);
-          const text = result?.response?.text();
-          if (text && text.trim()) return { text: text.trim(), modelUsed: modelName };
-        } catch (mErr) {
-          console.warn(`[KASA Chat SDK] Model ${modelName} failed: ${mErr.message}`);
-        }
-      }
-    } catch (sdkErr) {
-      console.warn(`[KASA Chat SDK] Init failed (${sdkErr.message}), falling back to direct REST...`);
-    }
-  }
+  const contents = [
+    ...sanitizedHistory,
+    { role: 'user', parts: [{ text: userMessage }] }
+  ];
 
-  // 2. Direct Native REST Fallback (Reliable, fast, zero SDK overhead)
+  const payload = {
+    system_instruction: { parts: [{ text: systemInstruction }] },
+    contents: contents,
+    generationConfig: { temperature: 0.7, maxOutputTokens: 800 }
+  };
+
+  const isBearerToken = token.startsWith('AQ.') || token.startsWith('ya29.');
+
   for (const modelName of modelsToTry) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`;
-    const contents = [
-      ...sanitizedHistory,
-      { role: 'user', parts: [{ text: userMessage }] }
-    ];
+    let url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
+    const headers = { 'Content-Type': 'application/json' };
 
-    const payload = {
-      system_instruction: { parts: [{ text: systemInstruction }] },
-      contents: contents,
-      generationConfig: { temperature: 0.7, maxOutputTokens: 1000 }
-    };
+    if (isBearerToken) {
+      headers['Authorization'] = `Bearer ${token}`;
+    } else {
+      url += `?key=${encodeURIComponent(token)}`;
+    }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 20000);
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
 
     try {
+      console.log(`[KASA Chat] Calling ${modelName} (${isBearerToken ? 'Bearer Header' : 'API Key URL'})...`);
       const res = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: headers,
         body: JSON.stringify(payload),
         signal: controller.signal
       });
       clearTimeout(timeoutId);
 
+      const data = await res.json().catch(() => ({}));
+
       if (res.ok) {
-        const data = await res.json();
         const reply = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (reply && reply.trim()) return { text: reply.trim(), modelUsed: modelName };
+        if (reply && reply.trim()) {
+          return { text: reply.trim(), modelUsed: modelName };
+        }
       } else {
-        const errJson = await res.json().catch(() => ({}));
-        console.warn(`[KASA Chat REST] ${modelName} returned HTTP ${res.status}:`, errJson.error?.message || res.statusText);
+        console.warn(`[KASA Chat] ${modelName} HTTP ${res.status}:`, data.error?.message || res.statusText);
+        if (res.status === 401 || res.status === 403) {
+          throw new Error(data.error?.message || 'Gemini authentication failed. Please verify your GEMINI_API_KEY.');
+        }
       }
-    } catch (fetchErr) {
+    } catch (err) {
       clearTimeout(timeoutId);
-      console.warn(`[KASA Chat REST] ${modelName} fetch error: ${fetchErr.message}`);
+      if (err.name === 'AbortError') {
+        console.warn(`[KASA Chat] ${modelName} timed out after 12s`);
+      } else {
+        console.warn(`[KASA Chat] ${modelName} error: ${err.message}`);
+      }
     }
   }
 
-  throw new Error('All Gemini connection attempts timed out or failed. Please retry.');
+  throw new Error('Gemini could not generate a response. Please try again.');
 }
 
 // HTTP Server
@@ -296,9 +280,8 @@ const server = http.createServer(async (req, res) => {
     const systemPrompt = "You are KASA AI, Ghana's premier AI companion. You understand English, Ghanaian Pidgin, and Ghanaian languages (Twi, Fante, Ga, Ewe). Be warm, witty, culturally attuned to Ghanaian life, and concise.";
 
     try {
-      console.log(`[KASA Chat] Processing message from user ${authUser.uid.slice(0, 8)}...`);
+      console.log(`[KASA Chat] Message received from user ${authUser.uid.slice(0, 8)}`);
       const { text, modelUsed } = await executeGeminiChat(geminiKey, systemPrompt, message, history);
-      console.log(`[KASA Chat] Responded successfully via ${modelUsed}`);
 
       return sendJson(200, {
         reply: text,
@@ -310,7 +293,7 @@ const server = http.createServer(async (req, res) => {
       console.error('[KASA Chat Error]', err.message);
       return sendJson(500, {
         error: 'CHAT_FAILED',
-        message: err.message.includes('timed out') ? 'Gemini response took too long, please retry.' : err.message
+        message: err.message
       });
     }
   }
