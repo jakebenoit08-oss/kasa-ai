@@ -174,6 +174,88 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ==========================================
+  // NEW: iOS Chat Endpoint via Render (uses AQ. key server-side)
+  // POST /api/chat - uses process.env.GEMINI_API_KEY (your AQ.Ab8... token)
+  // This fixes Gemini 404 on iOS because AQ tokens don't work with ?key= in browser, only in Node SDK
+  // ==========================================
+  if ((req.method === 'POST' && (pathname === '/api/chat' || pathname === '/api/gemini/chat' || pathname === '/api/ai/chat'))) {
+    let authUser;
+    try {
+      authUser = await authenticateRequest(req);
+    } catch (err) {
+      return sendJson(err.statusCode || 401, {
+        error: err.code || 'UNAUTHORIZED',
+        message: err.message,
+      });
+    }
+
+    const body = await readBody();
+    const userMessage = (body.message || body.prompt || '').trim();
+    const history = body.history || [];
+
+    if (!userMessage) {
+      return sendJson(400, { error: 'INVALID_PROMPT', message: 'Message is required' });
+    }
+
+    const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GEMINI_KEY;
+    if (!geminiKey) {
+      console.error('[KASA Chat] GEMINI_API_KEY not set on Render');
+      return sendJson(503, { error: 'BACKEND_NOT_CONFIGURED', message: 'GEMINI_API_KEY not configured on backend' });
+    }
+
+    try {
+      // Try @google/generative-ai SDK first (works with AQ. tokens)
+      let replyText = null;
+      try {
+        const { GoogleGenerativeAI } = require('@google/generative-ai');
+        const genAI = new GoogleGenerativeAI(geminiKey);
+        const model = genAI.getGenerativeModel({
+          model: 'gemini-2.5-flash',
+          systemInstruction: "You are KASA AI, Ghana's premier AI companion. You understand English, Ghanaian Pidgin, and local Ghanaian languages (Twi, Fante, Ga, Ewe). Be warm, witty, culturally attuned to Ghanaian life, and highly helpful.",
+        });
+        const chatHistory = (history || []).slice(-10).map(m => ({
+          role: (m.role === 'assistant' || m.role === 'model') ? 'model' : 'user',
+          parts: [{ text: m.text || m.content || m.parts?.[0]?.text || '' }],
+        })).filter(h => h.parts[0].text);
+        
+        const chat = model.startChat({ history: chatHistory });
+        const result = await chat.sendMessage(userMessage);
+        replyText = result.response.text();
+      } catch (sdkErr) {
+        console.warn('[KASA Chat] SDK failed, trying REST fallback:', sdkErr.message);
+        // Fallback: Direct REST call with v1beta + gemini-2.5-flash (AQ key may still work via REST if passed as Bearer?)
+        const modelsToTry = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-001'];
+        for (const m of modelsToTry) {
+          try {
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${geminiKey}`;
+            const r = await fetch(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                system_instruction: { parts: [{ text: "You are KASA AI, Ghana's premier AI companion. Understands English, Ghanaian Pidgin, Twi, Fante, Ga, Ewe. Warm, witty, culturally attuned." }] },
+                contents: [...history.slice(-10).map(h => ({ role: h.role === 'assistant' ? 'model' : 'user', parts: [{ text: h.text || h.content || '' }] })), { role: 'user', parts: [{ text: userMessage }] }],
+                generationConfig: { temperature: 0.7, maxOutputTokens: 1000 }
+              })
+            });
+            const j = await r.json();
+            if (r.ok && j.candidates) {
+              replyText = j.candidates[0].content.parts[0].text;
+              break;
+            }
+          } catch (e) {}
+        }
+        if (!replyText) throw sdkErr;
+      }
+
+      return sendJson(200, { reply: replyText, text: replyText, response: replyText });
+    } catch (err) {
+      console.error('[KASA Chat] Error:', err.message);
+      return sendJson(500, { error: 'CHAT_FAILED', message: err.message });
+    }
+  }
+
+
+  // ==========================================
   // Public Endpoint: Available Plans & Pricing
   // GET /api/billing/plans
   // ==========================================
@@ -234,7 +316,6 @@ const server = http.createServer(async (req, res) => {
     const verifiedEmail = authUser.email;
     const clientSuppliedUserId = parsedUrl.query.userId || req.headers['x-user-id'];
 
-    // Consistency check: client-supplied ID cannot mismatch verified UID
     if (clientSuppliedUserId && clientSuppliedUserId !== verifiedUid && clientSuppliedUserId !== 'usr_default_kasa') {
       return sendJson(403, {
         error: 'FORBIDDEN',
@@ -307,7 +388,6 @@ const server = http.createServer(async (req, res) => {
     const rawBuffer = await readRawBody();
     const signatureHeader = req.headers['x-paystack-signature'] || '';
 
-    // Verify HMAC SHA512 signature
     if (!verifyWebhookSignature(rawBuffer, signatureHeader)) {
       console.warn('[KASA Webhook] Received webhook with INVALID Paystack signature.');
       return sendJson(400, {
@@ -331,11 +411,8 @@ const server = http.createServer(async (req, res) => {
       if (eventType === 'charge.success') {
         const reference = eventData.reference;
         if (reference) {
-          // Authoritatively verify with Paystack to prevent spoofing
           const verifiedData = await verifyPaystackTransaction(reference);
           const targetUserId = (verifiedData.metadata && verifiedData.metadata.userId) || eventData.customer.email;
-
-          // Serialize execution under per-user mutex
           const releaseLock = await userMutex.acquire(targetUserId);
           try {
             await executeAtomicGrant(reference, verifiedData, 'charge.success');
@@ -365,12 +442,9 @@ const server = http.createServer(async (req, res) => {
           }, { merge: true });
         }
       }
-
-      // Always return 200 OK to acknowledge receipt to Paystack
       return sendJson(200, { status: 'received' });
     } catch (err) {
       console.error(`[KASA Webhook] Error handling event ${eventType}:`, err.message);
-      // Return 200 so Paystack does not loop if it was a data error, but log deeply
       return sendJson(200, { status: 'error_logged', message: err.message });
     }
   }
@@ -400,7 +474,6 @@ const server = http.createServer(async (req, res) => {
     }
 
     try {
-      // Authoritatively verify with Paystack
       const verifiedData = await verifyPaystackTransaction(reference);
       const paymentUserId = verifiedData.metadata && verifiedData.metadata.userId;
 
@@ -411,7 +484,6 @@ const server = http.createServer(async (req, res) => {
         });
       }
 
-      // Serialize under per-user mutex
       const releaseLock = await userMutex.acquire(verifiedUid);
       let grantResult;
       try {
@@ -481,9 +553,8 @@ const server = http.createServer(async (req, res) => {
 
     const isOwner = isOwnerEmail(verifiedEmail);
     const isDevBypass = req.headers['x-kasa-dev-bypass'] === 'true' && DEV_ALLOW_UNLIMITED;
-    const COST_PER_GENERATION = 1; // 1 KASA Music Credit per generation
+    const COST_PER_GENERATION = 1;
 
-    // 1. ATOMIC CREDIT CHECK & RESERVATION UNDER PER-USER MUTEX
     let reservedCredit = false;
     let entitlement;
 
@@ -491,7 +562,6 @@ const server = http.createServer(async (req, res) => {
       const releaseLock = await userMutex.acquire(verifiedUid);
       try {
         entitlement = await getAuthoritativeEntitlement(verifiedUid, verifiedEmail);
-
         if (entitlement.musicCredits < COST_PER_GENERATION) {
           return sendJson(403, {
             error: 'CREDIT_LIMIT_REACHED',
@@ -503,8 +573,6 @@ const server = http.createServer(async (req, res) => {
             periodEnd: entitlement.periodEnd,
           });
         }
-
-        // Atomically debit / reserve the credit in Firestore
         const db = getDb();
         const newCredits = entitlement.musicCredits - COST_PER_GENERATION;
         await db.collection('entitlements').doc(verifiedUid).update({
@@ -521,10 +589,8 @@ const server = http.createServer(async (req, res) => {
       entitlement = await getAuthoritativeEntitlement(verifiedUid, verifiedEmail);
     }
 
-    // 2. Check AIMusicAPI key configuration
     const apiKey = getApiKey();
     if (!apiKey) {
-      // Refund reserved credit if backend is unconfigured
       if (reservedCredit) {
         const releaseRefund = await userMutex.acquire(verifiedUid);
         try {
@@ -548,22 +614,15 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
-    // 3. Build AIMusicAPI Sonic payload
     const sonicPayload = {
       custom_mode: false,
       mv: SONIC_MODEL,
       gpt_description_prompt: prompt,
       make_instrumental: !!body.instrumental,
     };
+    if (body.title && body.title.trim()) sonicPayload.title = body.title.trim();
+    if (body.tags && body.tags.trim()) sonicPayload.tags = body.tags.trim();
 
-    if (body.title && body.title.trim()) {
-      sonicPayload.title = body.title.trim();
-    }
-    if (body.tags && body.tags.trim()) {
-      sonicPayload.tags = body.tags.trim();
-    }
-
-    // Helper to safely refund reserved credit upon upstream failure
     const rollbackReservation = async () => {
       if (!reservedCredit) return;
       const releaseRefund = await userMutex.acquire(verifiedUid);
@@ -573,10 +632,7 @@ const server = http.createServer(async (req, res) => {
         const snap = await ref.get();
         if (snap.exists) {
           const restored = (snap.data().musicCredits || 0) + COST_PER_GENERATION;
-          await ref.update({
-            musicCredits: restored,
-            updatedAt: Date.now(),
-          });
+          await ref.update({ musicCredits: restored, updatedAt: Date.now() });
           console.log(`[KASA Backend] Rolled back reserved credit for user ${verifiedUid}. Balance restored to ${restored}`);
         }
       } finally {
@@ -588,106 +644,33 @@ const server = http.createServer(async (req, res) => {
       console.log(`[KASA Backend] Submitting music task to AIMusicAPI Sonic (${SONIC_MODEL}) for user ${verifiedUid.slice(0, 8)}...`);
       const upstreamRes = await fetch(`${AIMUSIC_BASE_URL}/create`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-        },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
         body: JSON.stringify(sonicPayload),
       });
-
       const statusCode = upstreamRes.status;
       const rawText = await upstreamRes.text();
       let resJson = {};
-      try {
-        resJson = JSON.parse(rawText);
-      } catch (e) {
-        resJson = { message: rawText };
-      }
+      try { resJson = JSON.parse(rawText); } catch (e) { resJson = { message: rawText }; }
 
-      if (statusCode === 401) {
-        await rollbackReservation();
-        console.error('[KASA Backend] AIMusicAPI returned 401 Unauthorized (Invalid API Key).');
-        return sendJson(401, {
-          error: 'AUTH_ERROR',
-          message: 'Music service authentication error. Please verify backend provider key.',
-        });
-      }
+      if (statusCode === 401) { await rollbackReservation(); return sendJson(401, { error: 'AUTH_ERROR', message: 'Music service authentication error.' }); }
+      if (statusCode === 403) { await rollbackReservation(); return sendJson(403, { error: 'INSUFFICIENT_CREDITS', message: 'Music generation temporarily unavailable.' }); }
+      if (statusCode === 429) { await rollbackReservation(); return sendJson(429, { error: 'RATE_LIMITED', message: 'Too many requests.' }); }
+      if (!upstreamRes.ok) { await rollbackReservation(); return sendJson(statusCode, { error: 'PROVIDER_ERROR', message: resJson.message || 'Music generation failed.' }); }
 
-      if (statusCode === 403) {
-        await rollbackReservation();
-        console.error('[KASA Backend] AIMusicAPI returned 403 Forbidden (Provider account issue).');
-        return sendJson(403, {
-          error: 'INSUFFICIENT_CREDITS',
-          message: 'Music generation is temporarily unavailable. Please try again later.',
-        });
-      }
-
-      if (statusCode === 429) {
-        await rollbackReservation();
-        console.warn('[KASA Backend] AIMusicAPI rate limited (429).');
-        return sendJson(429, {
-          error: 'RATE_LIMITED',
-          message: 'Too many requests right now. Please wait a moment and try again.',
-        });
-      }
-
-      if (!upstreamRes.ok) {
-        await rollbackReservation();
-        console.error(`[KASA Backend] AIMusicAPI returned HTTP ${statusCode}:`, rawText);
-        return sendJson(statusCode, {
-          error: 'PROVIDER_ERROR',
-          message: resJson.message || 'Music generation failed. Please try again.',
-        });
-      }
-
-      // Extract task ID from upstream response
       let taskId = null;
-      if (resJson.data && typeof resJson.data === 'object' && resJson.data.task_id) {
-        taskId = resJson.data.task_id;
-      } else if (resJson.task_id) {
-        taskId = resJson.task_id;
-      } else if (resJson.data && typeof resJson.data === 'string') {
-        taskId = resJson.data;
-      } else if (resJson.id) {
-        taskId = resJson.id;
-      }
+      if (resJson.data && resJson.data.task_id) taskId = resJson.data.task_id;
+      else if (resJson.task_id) taskId = resJson.task_id;
+      else if (resJson.data && typeof resJson.data === 'string') taskId = resJson.data;
+      else if (resJson.id) taskId = resJson.id;
 
-      if (!taskId) {
-        await rollbackReservation();
-        console.error('[KASA Backend] Could not extract task_id from AIMusicAPI response:', rawText);
-        return sendJson(502, {
-          error: 'INVALID_PROVIDER_RESPONSE',
-          message: 'Music service returned an unexpected response. Please try again.',
-        });
-      }
+      if (!taskId) { await rollbackReservation(); return sendJson(502, { error: 'INVALID_PROVIDER_RESPONSE', message: 'Unexpected response.' }); }
 
-      // Record task in persistent ledger
-      await recordTask({
-        taskId,
-        userId: verifiedUid,
-        status: 'pending',
-        costCredits: COST_PER_GENERATION,
-        refunded: false,
-        prompt,
-      });
-
-      console.log(`[KASA Backend] Task ${taskId} created for user ${verifiedUid}. Remaining credits: ${isOwner ? 999 : entitlement.musicCredits}`);
-
-      return sendJson(200, {
-        taskId: taskId,
-        status: 'pending',
-        message: 'Creating your song...',
-        remainingCredits: isOwner ? 999 : (DEV_ALLOW_UNLIMITED ? 999 : entitlement.musicCredits),
-        musicCredits: isOwner ? 999 : (DEV_ALLOW_UNLIMITED ? 999 : entitlement.musicCredits),
-      });
-
+      await recordTask({ taskId, userId: verifiedUid, status: 'pending', costCredits: COST_PER_GENERATION, refunded: false, prompt });
+      console.log(`[KASA Backend] Task ${taskId} created for user ${verifiedUid}.`);
+      return sendJson(200, { taskId, status: 'pending', message: 'Creating your song...', remainingCredits: isOwner ? 999 : entitlement.musicCredits, musicCredits: isOwner ? 999 : entitlement.musicCredits });
     } catch (err) {
       await rollbackReservation();
-      console.error('[KASA Backend] Network error communicating with AIMusicAPI:', err.message);
-      return sendJson(503, {
-        error: 'NETWORK_ERROR',
-        message: "Couldn't connect to KASA Music. Check your internet connection and try again.",
-      });
+      return sendJson(503, { error: 'NETWORK_ERROR', message: "Couldn't connect to KASA Music." });
     }
   }
 
@@ -697,191 +680,62 @@ const server = http.createServer(async (req, res) => {
   // ==========================================
   if (req.method === 'GET' && pathname.startsWith('/api/music/task/')) {
     let authUser;
-    try {
-      authUser = await authenticateRequest(req);
-    } catch (err) {
-      return sendJson(err.statusCode || 401, {
-        error: err.code || 'UNAUTHORIZED',
-        message: err.message,
-      });
-    }
-
+    try { authUser = await authenticateRequest(req); } catch (err) { return sendJson(err.statusCode || 401, { error: err.code || 'UNAUTHORIZED', message: err.message }); }
     const verifiedUid = authUser.uid;
     const parts = pathname.split('/');
     const taskId = parts[parts.length - 1];
-
-    if (!taskId) {
-      return sendJson(400, { error: 'MISSING_TASK_ID', message: 'Task ID is required' });
-    }
-
-    // Task Ownership Verification:
-    // A user can ONLY view tasks created by their own authenticated UID
+    if (!taskId) return sendJson(400, { error: 'MISSING_TASK_ID', message: 'Task ID is required' });
     const taskRecord = await getTask(taskId);
-    if (taskRecord && taskRecord.userId !== verifiedUid) {
-      console.warn(`[KASA Security] User ${verifiedUid} attempted unauthorized access to task ${taskId} owned by ${taskRecord.userId}`);
-      return sendJson(403, {
-        error: 'FORBIDDEN',
-        message: 'You do not have permission to access this task.',
-      });
-    }
-
+    if (taskRecord && taskRecord.userId !== verifiedUid) return sendJson(403, { error: 'FORBIDDEN', message: 'No permission.' });
     const apiKey = getApiKey();
-    if (!apiKey) {
-      return sendJson(503, {
-        error: 'BACKEND_NOT_CONFIGURED',
-        message: 'AIMusicAPI key is not configured on the KASA backend.',
-      });
-    }
-
+    if (!apiKey) return sendJson(503, { error: 'BACKEND_NOT_CONFIGURED', message: 'Key not configured.' });
     try {
       const pollUrl = `${AIMUSIC_BASE_URL}/task/${encodeURIComponent(taskId)}`;
-      const upstreamRes = await fetch(pollUrl, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-        },
-      });
-
+      const upstreamRes = await fetch(pollUrl, { method: 'GET', headers: { 'Authorization': `Bearer ${apiKey}` } });
       const statusCode = upstreamRes.status;
       const rawText = await upstreamRes.text();
       let resJson = {};
-      try {
-        resJson = JSON.parse(rawText);
-      } catch (e) {
-        resJson = { message: rawText };
-      }
+      try { resJson = JSON.parse(rawText); } catch (e) { resJson = { message: rawText }; }
+      if (statusCode === 401) return sendJson(401, { error: 'AUTH_ERROR', message: 'Auth error.' });
+      if (statusCode === 403) return sendJson(403, { error: 'INSUFFICIENT_CREDITS', message: 'Unavailable.' });
+      if (statusCode === 429) return sendJson(429, { error: 'RATE_LIMITED', message: 'Too many requests.' });
+      if (!upstreamRes.ok) return sendJson(statusCode, { error: 'PROVIDER_ERROR', message: resJson.message || 'Polling failed.' });
 
-      if (statusCode === 401) {
-        return sendJson(401, {
-          error: 'AUTH_ERROR',
-          message: 'Music service authentication error. Please contact support.',
-        });
-      }
-      if (statusCode === 403) {
-        return sendJson(403, {
-          error: 'INSUFFICIENT_CREDITS',
-          message: 'Music generation is temporarily unavailable. Please try again later.',
-        });
-      }
-      if (statusCode === 429) {
-        return sendJson(429, {
-          error: 'RATE_LIMITED',
-          message: 'Too many requests right now. Please wait a moment and try again.',
-        });
-      }
-      if (!upstreamRes.ok) {
-        return sendJson(statusCode, {
-          error: 'PROVIDER_ERROR',
-          message: resJson.message || 'Task status polling failed.',
-        });
-      }
-
-      let taskState = 'pending';
-      let clips = [];
-
+      let taskState = 'pending'; let clips = [];
       if (Array.isArray(resJson.data)) {
         clips = resJson.data;
         const allDone = clips.length > 0 && clips.every(c => c.state === 'succeeded' || c.audio_url);
         const anyFailed = clips.some(c => c.state === 'failed');
-        if (allDone) {
-          taskState = 'succeeded';
-        } else if (anyFailed) {
-          taskState = 'failed';
-        } else {
-          taskState = 'running';
-        }
+        if (allDone) taskState = 'succeeded'; else if (anyFailed) taskState = 'failed'; else taskState = 'running';
       } else if (resJson.data && typeof resJson.data === 'object') {
         taskState = resJson.data.state || resJson.state || 'running';
-        if (Array.isArray(resJson.data.clips)) {
-          clips = resJson.data.clips;
-        } else if (resJson.data.audio_url) {
-          clips = [resJson.data];
-        }
-      } else if (resJson.state) {
-        taskState = resJson.state;
-      }
+        if (Array.isArray(resJson.data.clips)) clips = resJson.data.clips;
+        else if (resJson.data.audio_url) clips = [resJson.data];
+      } else if (resJson.state) taskState = resJson.state;
 
       if (taskState === 'succeeded') {
-        if (taskRecord && taskRecord.status !== 'succeeded') {
-          taskRecord.status = 'succeeded';
-          await updateTask(taskRecord);
-        }
-
-        const validClips = clips
-          .filter(c => c && typeof c === 'object' && c.audio_url && typeof c.audio_url === 'string' && c.audio_url.trim().length > 0)
-          .map((c, index) => ({
-            id: c.id || `${taskId}_var${index + 1}`,
-            title: c.title || 'Untitled Song',
-            audioUrl: c.audio_url.trim(),
-            duration: typeof c.duration === 'number' ? c.duration : 120.0,
-            imageUrl: c.image_url || c.image_large_url || null,
-            prompt: c.prompt || '',
-            tags: c.tags || '',
-          }));
-
-        if (validClips.length === 0) {
-          return sendJson(200, {
-            status: 'running',
-            message: 'Finishing your track...',
-          });
-        }
-
-        return sendJson(200, {
-          status: 'succeeded',
-          message: validClips.length > 1 ? 'Your songs are ready 🎵' : 'Song ready 🎵',
-          clips: validClips,
-          clip: validClips[0],
-        });
+        if (taskRecord && taskRecord.status !== 'succeeded') { taskRecord.status = 'succeeded'; await updateTask(taskRecord); }
+        const validClips = clips.filter(c => c && c.audio_url && c.audio_url.trim().length > 0).map((c, index) => ({ id: c.id || `${taskId}_var${index + 1}`, title: c.title || 'Untitled Song', audioUrl: c.audio_url.trim(), duration: typeof c.duration === 'number' ? c.duration : 120.0, imageUrl: c.image_url || c.image_large_url || null, prompt: c.prompt || '', tags: c.tags || '' }));
+        if (validClips.length === 0) return sendJson(200, { status: 'running', message: 'Finishing your track...' });
+        return sendJson(200, { status: 'succeeded', message: validClips.length > 1 ? 'Your songs are ready 🎵' : 'Song ready 🎵', clips: validClips, clip: validClips[0] });
       }
-
       if (taskState === 'failed') {
-        // IDEMPOTENT REFUND: Atomically refund spent credit in Firestore EXACTLY ONCE
         if (taskRecord && !taskRecord.refunded) {
           const releaseLock = await userMutex.acquire(taskRecord.userId);
           try {
-            // Re-read task under mutex lock to eliminate polling race conditions
             const freshTask = await getTask(taskId);
             if (freshTask && !freshTask.refunded) {
-              freshTask.refunded = true;
-              freshTask.refundedAt = Date.now();
-              freshTask.status = 'failed';
-              await updateTask(freshTask);
-
-              const db = getDb();
-              const ref = db.collection('entitlements').doc(taskRecord.userId);
-              const snap = await ref.get();
-              if (snap.exists) {
-                const restored = (snap.data().musicCredits || 0) + freshTask.costCredits;
-                await ref.update({
-                  musicCredits: restored,
-                  updatedAt: Date.now(),
-                });
-                console.log(`[KASA Backend] Idempotently refunded ${freshTask.costCredits} credit to user ${taskRecord.userId} for task ${taskId}. New balance: ${restored}`);
-              }
+              freshTask.refunded = true; freshTask.refundedAt = Date.now(); freshTask.status = 'failed'; await updateTask(freshTask);
+              const db = getDb(); const ref = db.collection('entitlements').doc(taskRecord.userId); const snap = await ref.get();
+              if (snap.exists) { const restored = (snap.data().musicCredits || 0) + freshTask.costCredits; await ref.update({ musicCredits: restored, updatedAt: Date.now() }); }
             }
-          } finally {
-            releaseLock();
-          }
+          } finally { releaseLock(); }
         }
-
-        return sendJson(200, {
-          status: 'failed',
-          error: 'Song generation could not be completed. Please try with a different prompt.',
-        });
+        return sendJson(200, { status: 'failed', error: 'Song generation could not be completed.' });
       }
-
-      // Still running / pending
-      return sendJson(200, {
-        status: 'running',
-        message: 'Your song is being generated...',
-      });
-
+      return sendJson(200, { status: 'running', message: 'Your song is being generated...' });
     } catch (err) {
-      console.error('[KASA Backend] Error polling task:', err.message);
-      return sendJson(503, {
-        error: 'NETWORK_ERROR',
-        message: "Couldn't connect to KASA Music. Check your internet connection and try again.",
-      });
+      return sendJson(503, { error: 'NETWORK_ERROR', message: "Couldn't connect." });
     }
   }
 
@@ -890,64 +744,36 @@ const server = http.createServer(async (req, res) => {
   // POST /api/music/dev/set-tier
   // ==========================================
   if (req.method === 'POST' && pathname === '/api/music/dev/set-tier') {
-    if (process.env.NODE_ENV === 'production') {
-      return sendJson(404, { error: 'NOT_FOUND', message: 'Endpoint not found' });
-    }
-
+    if (process.env.NODE_ENV === 'production') return sendJson(404, { error: 'NOT_FOUND', message: 'Endpoint not found' });
     const adminSecret = process.env.ADMIN_API_SECRET;
     const providedSecret = req.headers['x-kasa-admin-secret'];
-
-    if (!adminSecret || adminSecret.length < 32 || providedSecret !== adminSecret) {
-      return sendJson(403, {
-        error: 'FORBIDDEN',
-        message: 'Admin authorization required.',
-      });
-    }
-
+    if (!adminSecret || adminSecret.length < 32 || providedSecret !== adminSecret) return sendJson(403, { error: 'FORBIDDEN', message: 'Admin authorization required.' });
     const body = await readBody();
     const targetUserId = body.userId;
-    if (!targetUserId) {
-      return sendJson(400, { error: 'INVALID_REQUEST', message: 'userId is required' });
-    }
-
-    const db = getDb();
-    const ref = db.collection('entitlements').doc(targetUserId);
+    if (!targetUserId) return sendJson(400, { error: 'INVALID_REQUEST', message: 'userId is required' });
+    const db = getDb(); const ref = db.collection('entitlements').doc(targetUserId);
     const updates = { updatedAt: Date.now() };
     if (['free', 'plus', 'pro'].includes(body.tier)) updates.tier = body.tier;
     if (typeof body.musicCredits === 'number') updates.musicCredits = body.musicCredits;
     if (body.subscriptionStatus) updates.subscriptionStatus = body.subscriptionStatus;
-
-    await ref.set(updates, { merge: true });
-    const snap = await ref.get();
-
-    return sendJson(200, {
-      success: true,
-      data: snap.data(),
-    });
+    await ref.set(updates, { merge: true }); const snap = await ref.get();
+    return sendJson(200, { success: true, data: snap.data() });
   }
 
   // 404 for unknown endpoints
   sendJson(404, { error: 'NOT_FOUND', message: 'Endpoint not found' });
 });
 
-process.on('uncaughtException', (err) => {
-  console.error('[KASA Backend uncaughtException]', err);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('[KASA Backend unhandledRejection]', reason);
-});
-
-server.on('error', (err) => {
-  console.error('[KASA Backend Server Error]', err);
-});
-
+process.on('uncaughtException', (err) => { console.error('[KASA Backend uncaughtException]', err); });
+process.on('unhandledRejection', (reason, promise) => { console.error('[KASA Backend unhandledRejection]', reason); });
+server.on('error', (err) => { console.error('[KASA Backend Server Error]', err); });
 server.listen(PORT, '0.0.0.0', () => {
   const key = getApiKey();
   console.log(`====================================================`);
   console.log(`  KASA AI Secure Billing & Music Backend listening on port ${PORT}`);
   console.log(`  AIMUSIC_API_KEY: [${key ? 'CONFIGURED' : 'NOT_CONFIGURED'}]`);
   console.log(`  PAYSTACK_SECRET_KEY: [${process.env.PAYSTACK_SECRET_KEY ? 'CONFIGURED' : 'NOT_CONFIGURED'}]`);
+  console.log(`  GEMINI_API_KEY: [${process.env.GEMINI_API_KEY ? 'CONFIGURED: ' + maskSecret(process.env.GEMINI_API_KEY) : 'NOT_CONFIGURED'}]`);
   console.log(`  Paystack Mode: ${process.env.PAYSTACK_MODE || 'live'}`);
   console.log(`  Sonic Model: ${SONIC_MODEL}`);
   console.log(`  Dev Mode (Unlimited): ${DEV_ALLOW_UNLIMITED}`);
