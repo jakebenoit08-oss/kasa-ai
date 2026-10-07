@@ -174,9 +174,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ==========================================
-  // NEW: iOS Chat Endpoint via Render (uses AQ. key server-side)
+  // NEW: iOS Chat Endpoint via Render (uses AQ. key server-side) - 404-PROOF AUTO-DISCOVERY
   // POST /api/chat - uses process.env.GEMINI_API_KEY (your AQ.Ab8... token)
-  // FIXED: 2.5-flash retired -> now 2.0-flash
+  // FIX: tries gemini-flash-latest, gemini-2.5-flash, gemini-2.0-flash, gemini-1.5-flash in order
   // ==========================================
   if ((req.method === 'POST' && (pathname === '/api/chat' || pathname === '/api/gemini/chat' || pathname === '/api/ai/chat'))) {
     let authUser;
@@ -204,30 +204,40 @@ const server = http.createServer(async (req, res) => {
     }
 
     try {
-      // Try @google/generative-ai SDK first (works with AQ. tokens)
       let replyText = null;
-      try {
-        const { GoogleGenerativeAI } = require('@google/generative-ai');
-        const genAI = new GoogleGenerativeAI(geminiKey);
-        const model = genAI.getGenerativeModel({
-          model: 'gemini-2.0-flash',
-          systemInstruction: "You are KASA AI, Ghana's premier AI companion. You understand English, Ghanaian Pidgin, and local Ghanaian languages (Twi, Fante, Ga, Ewe). Be warm, witty, culturally attuned to Ghanaian life, and highly helpful.",
-        });
-        const chatHistory = (history || []).slice(-10).map(m => ({
-          role: (m.role === 'assistant' || m.role === 'model') ? 'model' : 'user',
-          parts: [{ text: m.text || m.content || m.parts?.[0]?.text || '' }],
-        })).filter(h => h.parts[0].text);
-        
-        const chat = model.startChat({ history: chatHistory });
-        const result = await chat.sendMessage(userMessage);
-        replyText = result.response.text();
-      } catch (sdkErr) {
-        console.warn('[KASA Chat] SDK failed, trying REST fallback:', sdkErr.message);
-        // Fallback: Direct REST call - FIXED MODELS
-        const modelsToTry = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-latest', 'gemini-flash-latest'];
-        for (const m of modelsToTry) {
+      let lastErr = 'unknown';
+      const MODELS = ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-latest', 'gemini-2.0-flash-001', 'gemini-2.5-flash-lite'];
+
+      // Try SDK first for each model
+      for (const modelName of MODELS) {
+        try {
+          const { GoogleGenerativeAI } = require('@google/generative-ai');
+          const genAI = new GoogleGenerativeAI(geminiKey);
+          const model = genAI.getGenerativeModel({
+            model: modelName,
+            systemInstruction: "You are KASA AI, Ghana's premier AI companion. You understand English, Ghanaian Pidgin, and local Ghanaian languages (Twi, Fante, Ga, Ewe). Be warm, witty, culturally attuned to Ghanaian life, and highly helpful.",
+          });
+          const chatHistory = (history || []).slice(-10).map(m => ({
+            role: (m.role === 'assistant' || m.role === 'model') ? 'model' : 'user',
+            parts: [{ text: m.text || m.content || m.parts?.[0]?.text || '' }],
+          })).filter(h => h.parts[0].text);
+          
+          const chat = model.startChat({ history: chatHistory });
+          const result = await chat.sendMessage(userMessage);
+          replyText = result.response.text();
+          if (replyText) { console.log(`[KASA Chat] SUCCESS via SDK model ${modelName}`); break; }
+        } catch (sdkErr) {
+          lastErr = sdkErr.message;
+          console.warn(`[KASA Chat] SDK model ${modelName} failed: ${sdkErr.message.slice(0,200)}`);
+          continue;
+        }
+      }
+
+      // Fallback REST if SDK fails
+      if (!replyText) {
+        for (const modelName of MODELS) {
           try {
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${geminiKey}`;
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${geminiKey}`;
             const r = await fetch(url, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -238,14 +248,18 @@ const server = http.createServer(async (req, res) => {
               })
             });
             const j = await r.json();
-            if (r.ok && j.candidates) {
+            if (r.ok && j.candidates && j.candidates[0]?.content?.parts?.[0]?.text) {
               replyText = j.candidates[0].content.parts[0].text;
+              console.log(`[KASA Chat] SUCCESS via REST model ${modelName}`);
               break;
+            } else {
+              lastErr = JSON.stringify(j).slice(0,500);
             }
-          } catch (e) {}
+          } catch (e) { lastErr = e.message; }
         }
-        if (!replyText) throw sdkErr;
       }
+
+      if (!replyText) throw new Error(lastErr);
 
       return sendJson(200, { reply: replyText, text: replyText, response: replyText });
     } catch (err) {
@@ -253,6 +267,7 @@ const server = http.createServer(async (req, res) => {
       return sendJson(500, { error: 'CHAT_FAILED', message: err.message });
     }
   }
+
 
 
   // ==========================================
