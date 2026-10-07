@@ -173,100 +173,117 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
+
+
   // ==========================================
-  // NEW: iOS Chat Endpoint via Render (uses AQ. key server-side) - 404-PROOF AUTO-DISCOVERY
-  // POST /api/chat - uses process.env.GEMINI_API_KEY (your AQ.Ab8... token)
-  // FIX: tries gemini-flash-latest, gemini-2.5-flash, gemini-2.0-flash, gemini-1.5-flash in order
+  // GEMINI OFFICIAL FIX - Direct from Google AI Studio (fixes 45s timeout)
+  // Primary: gemini-3.8-flash, Fallback: gemini-flash-latest, REST, 8s timeout
   // ==========================================
-  if ((req.method === 'POST' && (pathname === '/api/chat' || pathname === '/api/gemini/chat' || pathname === '/api/ai/chat'))) {
-    let authUser;
+  const GEMINI_API_KEY_FAST = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GEMINI_KEY;
+  const PRIMARY_MODEL = "gemini-3.8-flash";
+  const FALLBACK_MODEL = "gemini-flash-latest";
+
+  async function callGeminiRest(model, systemInstruction, userMessage, conversationHistory = []) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY_FAST}`;
+    const contents = [
+      ...conversationHistory.slice(-8).map(h => ({ role: h.role === 'assistant' ? 'model' : 'user', parts: [{ text: (h.text || h.content || '').slice(0,2000) }] })),
+      { role: "user", parts: [{ text: userMessage }] }
+    ];
+    const payload = {
+      system_instruction: { parts: [{ text: systemInstruction }] },
+      contents: contents,
+      generationConfig: { temperature: 0.7, maxOutputTokens: 1000 }
+    };
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
     try {
-      authUser = await authenticateRequest(req);
-    } catch (err) {
-      return sendJson(err.statusCode || 401, {
-        error: err.code || 'UNAUTHORIZED',
-        message: err.message,
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: controller.signal
       });
-    }
-
-    const body = await readBody();
-    const userMessage = (body.message || body.prompt || '').trim();
-    const history = body.history || [];
-
-    if (!userMessage) {
-      return sendJson(400, { error: 'INVALID_PROMPT', message: 'Message is required' });
-    }
-
-    const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GEMINI_KEY;
-    if (!geminiKey) {
-      console.error('[KASA Chat] GEMINI_API_KEY not set on Render');
-      return sendJson(503, { error: 'BACKEND_NOT_CONFIGURED', message: 'GEMINI_API_KEY not configured on backend' });
-    }
-
-    try {
-      let replyText = null;
-      let lastErr = 'unknown';
-      const MODELS = ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-latest', 'gemini-2.0-flash-001', 'gemini-2.5-flash-lite'];
-
-      // Try SDK first for each model
-      for (const modelName of MODELS) {
-        try {
-          const { GoogleGenerativeAI } = require('@google/generative-ai');
-          const genAI = new GoogleGenerativeAI(geminiKey);
-          const model = genAI.getGenerativeModel({
-            model: modelName,
-            systemInstruction: "You are KASA AI, Ghana's premier AI companion. You understand English, Ghanaian Pidgin, and local Ghanaian languages (Twi, Fante, Ga, Ewe). Be warm, witty, culturally attuned to Ghanaian life, and highly helpful.",
-          });
-          const chatHistory = (history || []).slice(-10).map(m => ({
-            role: (m.role === 'assistant' || m.role === 'model') ? 'model' : 'user',
-            parts: [{ text: m.text || m.content || m.parts?.[0]?.text || '' }],
-          })).filter(h => h.parts[0].text);
-          
-          const chat = model.startChat({ history: chatHistory });
-          const result = await chat.sendMessage(userMessage);
-          replyText = result.response.text();
-          if (replyText) { console.log(`[KASA Chat] SUCCESS via SDK model ${modelName}`); break; }
-        } catch (sdkErr) {
-          lastErr = sdkErr.message;
-          console.warn(`[KASA Chat] SDK model ${modelName} failed: ${sdkErr.message.slice(0,200)}`);
-          continue;
-        }
+      clearTimeout(timeoutId);
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.error?.message || `HTTP ${res.status}`);
       }
-
-      // Fallback REST if SDK fails
-      if (!replyText) {
-        for (const modelName of MODELS) {
-          try {
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${geminiKey}`;
-            const r = await fetch(url, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                system_instruction: { parts: [{ text: "You are KASA AI, Ghana's premier AI companion. Understands English, Ghanaian Pidgin, Twi, Fante, Ga, Ewe. Warm, witty, culturally attuned." }] },
-                contents: [...history.slice(-10).map(h => ({ role: h.role === 'assistant' ? 'model' : 'user', parts: [{ text: h.text || h.content || '' }] })), { role: 'user', parts: [{ text: userMessage }] }],
-                generationConfig: { temperature: 0.7, maxOutputTokens: 1000 }
-              })
-            });
-            const j = await r.json();
-            if (r.ok && j.candidates && j.candidates[0]?.content?.parts?.[0]?.text) {
-              replyText = j.candidates[0].content.parts[0].text;
-              console.log(`[KASA Chat] SUCCESS via REST model ${modelName}`);
-              break;
-            } else {
-              lastErr = JSON.stringify(j).slice(0,500);
-            }
-          } catch (e) { lastErr = e.message; }
-        }
-      }
-
-      if (!replyText) throw new Error(lastErr);
-
-      return sendJson(200, { reply: replyText, text: replyText, response: replyText });
+      const data = await res.json();
+      const reply = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!reply) throw new Error("No text returned by model");
+      return reply;
     } catch (err) {
-      console.error('[KASA Chat] Error:', err.message);
-      return sendJson(500, { error: 'CHAT_FAILED', message: err.message });
+      clearTimeout(timeoutId);
+      throw err;
     }
   }
+
+  if ((req.method === 'POST' && (pathname === '/api/chat' || pathname === '/api/gemini/chat' || pathname === '/api/ai/chat'))) {
+    let authUser;
+    try { authUser = await authenticateRequest(req); } catch (err) {
+      return sendJson(err.statusCode || 401, { error: err.code || 'UNAUTHORIZED', message: err.message });
+    }
+    const body = await readBody();
+    const message = (body.message || body.prompt || '').trim();
+    const history = body.history || [];
+    if (!message) return sendJson(400, { error: 'INVALID_PROMPT', message: 'Message is required.' });
+
+    if (!GEMINI_API_KEY_FAST) return sendJson(503, { error: 'BACKEND_NOT_CONFIGURED', message: 'GEMINI_API_KEY missing' });
+
+    const systemPrompt = "You are KASA AI, Ghana's premier AI companion. You understand English, Ghanaian Pidgin, and Ghanaian languages (Twi, Fante, Ga, Ewe). Be warm, witty, culturally attuned, and concise.";
+
+    try {
+      let reply;
+      try {
+        console.log(`[KASA Chat] Trying ${PRIMARY_MODEL}...`);
+        reply = await callGeminiRest(PRIMARY_MODEL, systemPrompt, message, history);
+        console.log(`[KASA Chat] SUCCESS ${PRIMARY_MODEL}`);
+      } catch (primaryErr) {
+        console.warn(`[KASA Chat] ${PRIMARY_MODEL} failed (${primaryErr.message}). Falling back to ${FALLBACK_MODEL}...`);
+        reply = await callGeminiRest(FALLBACK_MODEL, systemPrompt, message, history);
+        console.log(`[KASA Chat] SUCCESS ${FALLBACK_MODEL}`);
+      }
+      return sendJson(200, { reply: reply, text: reply, response: reply, modelUsed: PRIMARY_MODEL });
+    } catch (err) {
+      console.error('[KASA Chat] All Gemini models failed:', err.message);
+      return sendJson(500, { error: 'CHAT_FAILED', message: err.name === 'AbortError' ? 'Gemini took too long, please retry' : err.message });
+    }
+  }
+
+
+  if ((req.method === 'POST' && (pathname === '/api/chat' || pathname === '/api/gemini/chat' || pathname === '/api/ai/chat'))) {
+    let authUser;
+    try { authUser = await authenticateRequest(req); } catch (err) {
+      return sendJson(err.statusCode || 401, { error: err.code || 'UNAUTHORIZED', message: err.message });
+    }
+    const body = await readBody();
+    const message = (body.message || body.prompt || '').trim();
+    const history = body.history || [];
+    if (!message) return sendJson(400, { error: 'INVALID_PROMPT', message: 'Message is required.' });
+
+    if (!GEMINI_API_KEY_FAST) return sendJson(503, { error: 'BACKEND_NOT_CONFIGURED', message: 'GEMINI_API_KEY missing' });
+
+    const systemPrompt = "You are KASA AI, Ghana's premier AI companion. You understand English, Ghanaian Pidgin, and Ghanaian languages (Twi, Fante, Ga, Ewe). Be warm, witty, culturally attuned, and concise.";
+
+    try {
+      let reply;
+      try {
+        console.log(`[KASA Chat] Trying ${PRIMARY_MODEL}...`);
+        reply = await callGeminiRest(PRIMARY_MODEL, systemPrompt, message, history);
+        console.log(`[KASA Chat] SUCCESS ${PRIMARY_MODEL}`);
+      } catch (primaryErr) {
+        console.warn(`[KASA Chat] ${PRIMARY_MODEL} failed (${primaryErr.message}). Falling back to ${FALLBACK_MODEL}...`);
+        reply = await callGeminiRest(FALLBACK_MODEL, systemPrompt, message, history);
+        console.log(`[KASA Chat] SUCCESS ${FALLBACK_MODEL}`);
+      }
+      return sendJson(200, { reply: reply, text: reply, response: reply, modelUsed: PRIMARY_MODEL });
+    } catch (err) {
+      console.error('[KASA Chat] All Gemini models failed:', err.message);
+      return sendJson(500, { error: 'CHAT_FAILED', message: err.name === 'AbortError' ? 'Gemini took too long, please retry' : err.message });
+    }
+  }
+
+
 
 
 
