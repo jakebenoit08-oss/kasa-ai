@@ -115,6 +115,97 @@ function getApiKey() {
   return null;
 }
 
+// ==========================================
+// GEMINI MULTI-LAYER SERVICE
+// Supports both @google/generative-ai SDK and Native REST API
+// ==========================================
+let GoogleGenerativeAIClass = null;
+try {
+  const sdk = require('@google/generative-ai');
+  GoogleGenerativeAIClass = sdk.GoogleGenerativeAI;
+} catch (e) {
+  // SDK optional; REST fallback works natively without dependencies
+}
+
+async function executeGeminiChat(apiKey, systemInstruction, userMessage, conversationHistory = []) {
+  const modelsToTry = ['gemini-3.8-flash', 'gemini-flash-latest'];
+
+  // Normalize conversation history format
+  const sanitizedHistory = (conversationHistory || []).slice(-8).map(h => ({
+    role: (h.role === 'assistant' || h.role === 'model') ? 'model' : 'user',
+    parts: [{ text: (h.text || h.content || '').slice(0, 2000) }]
+  })).filter(h => h.parts[0].text.length > 0);
+
+  // 1. Try with GoogleGenerativeAI SDK if installed
+  if (GoogleGenerativeAIClass) {
+    try {
+      const genAI = new GoogleGenerativeAIClass(apiKey);
+      for (const modelName of modelsToTry) {
+        try {
+          const model = genAI.getGenerativeModel({
+            model: modelName,
+            systemInstruction: systemInstruction,
+            generationConfig: { temperature: 0.7, maxOutputTokens: 1000 }
+          });
+          const chat = model.startChat({ history: sanitizedHistory });
+          const result = await Promise.race([
+            chat.sendMessage(userMessage),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('SDK_TIMEOUT')), 20000))
+          ]);
+          const text = result?.response?.text();
+          if (text && text.trim()) return { text: text.trim(), modelUsed: modelName };
+        } catch (mErr) {
+          console.warn(`[KASA Chat SDK] Model ${modelName} failed: ${mErr.message}`);
+        }
+      }
+    } catch (sdkErr) {
+      console.warn(`[KASA Chat SDK] Init failed (${sdkErr.message}), falling back to direct REST...`);
+    }
+  }
+
+  // 2. Direct Native REST Fallback (Reliable, fast, zero SDK overhead)
+  for (const modelName of modelsToTry) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`;
+    const contents = [
+      ...sanitizedHistory,
+      { role: 'user', parts: [{ text: userMessage }] }
+    ];
+
+    const payload = {
+      system_instruction: { parts: [{ text: systemInstruction }] },
+      contents: contents,
+      generationConfig: { temperature: 0.7, maxOutputTokens: 1000 }
+    };
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
+
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
+      if (res.ok) {
+        const data = await res.json();
+        const reply = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (reply && reply.trim()) return { text: reply.trim(), modelUsed: modelName };
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        console.warn(`[KASA Chat REST] ${modelName} returned HTTP ${res.status}:`, errJson.error?.message || res.statusText);
+      }
+    } catch (fetchErr) {
+      clearTimeout(timeoutId);
+      console.warn(`[KASA Chat REST] ${modelName} fetch error: ${fetchErr.message}`);
+    }
+  }
+
+  throw new Error('All Gemini connection attempts timed out or failed. Please retry.');
+}
+
 // HTTP Server
 const server = http.createServer(async (req, res) => {
   // CORS Headers
@@ -168,124 +259,61 @@ const server = http.createServer(async (req, res) => {
       aimusicConfigured: !!key,
       paystackConfigured: !!process.env.PAYSTACK_SECRET_KEY,
       paystackMode: process.env.PAYSTACK_MODE || 'live',
+      geminiConfigured: !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY),
       devMode: DEV_ALLOW_UNLIMITED,
       timestamp: Date.now(),
     });
   }
 
-
-
   // ==========================================
-  // GEMINI OFFICIAL FIX - Direct from Google AI Studio (fixes 45s timeout)
-  // Primary: gemini-3.8-flash, Fallback: gemini-flash-latest, REST, 8s timeout
+  // GEMINI AI CHAT ROUTE
+  // POST /api/chat, /api/gemini/chat, /api/ai/chat
   // ==========================================
-  const GEMINI_API_KEY_FAST = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GEMINI_KEY;
-  const PRIMARY_MODEL = "gemini-3.8-flash";
-  const FALLBACK_MODEL = "gemini-flash-latest";
-
-  async function callGeminiRest(model, systemInstruction, userMessage, conversationHistory = []) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY_FAST}`;
-    const contents = [
-      ...conversationHistory.slice(-8).map(h => ({ role: h.role === 'assistant' ? 'model' : 'user', parts: [{ text: (h.text || h.content || '').slice(0,2000) }] })),
-      { role: "user", parts: [{ text: userMessage }] }
-    ];
-    const payload = {
-      system_instruction: { parts: [{ text: systemInstruction }] },
-      contents: contents,
-      generationConfig: { temperature: 0.7, maxOutputTokens: 1000 }
-    };
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
+  if (req.method === 'POST' && (pathname === '/api/chat' || pathname === '/api/gemini/chat' || pathname === '/api/ai/chat')) {
+    let authUser;
     try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        signal: controller.signal
+      authUser = await authenticateRequest(req);
+    } catch (err) {
+      return sendJson(err.statusCode || 401, { error: err.code || 'UNAUTHORIZED', message: err.message });
+    }
+
+    const body = await readBody();
+    const message = (body.message || body.prompt || '').trim();
+    const history = body.history || [];
+
+    if (!message) {
+      return sendJson(400, { error: 'INVALID_PROMPT', message: 'Message is required.' });
+    }
+
+    const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GEMINI_KEY;
+    if (!geminiKey) {
+      return sendJson(503, {
+        error: 'BACKEND_NOT_CONFIGURED',
+        message: 'GEMINI_API_KEY is not configured in backend environment variables.'
       });
-      clearTimeout(timeoutId);
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => ({}));
-        throw new Error(errBody.error?.message || `HTTP ${res.status}`);
-      }
-      const data = await res.json();
-      const reply = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!reply) throw new Error("No text returned by model");
-      return reply;
-    } catch (err) {
-      clearTimeout(timeoutId);
-      throw err;
     }
-  }
 
-  if ((req.method === 'POST' && (pathname === '/api/chat' || pathname === '/api/gemini/chat' || pathname === '/api/ai/chat'))) {
-    let authUser;
-    try { authUser = await authenticateRequest(req); } catch (err) {
-      return sendJson(err.statusCode || 401, { error: err.code || 'UNAUTHORIZED', message: err.message });
-    }
-    const body = await readBody();
-    const message = (body.message || body.prompt || '').trim();
-    const history = body.history || [];
-    if (!message) return sendJson(400, { error: 'INVALID_PROMPT', message: 'Message is required.' });
-
-    if (!GEMINI_API_KEY_FAST) return sendJson(503, { error: 'BACKEND_NOT_CONFIGURED', message: 'GEMINI_API_KEY missing' });
-
-    const systemPrompt = "You are KASA AI, Ghana's premier AI companion. You understand English, Ghanaian Pidgin, and Ghanaian languages (Twi, Fante, Ga, Ewe). Be warm, witty, culturally attuned, and concise.";
+    const systemPrompt = "You are KASA AI, Ghana's premier AI companion. You understand English, Ghanaian Pidgin, and Ghanaian languages (Twi, Fante, Ga, Ewe). Be warm, witty, culturally attuned to Ghanaian life, and concise.";
 
     try {
-      let reply;
-      try {
-        console.log(`[KASA Chat] Trying ${PRIMARY_MODEL}...`);
-        reply = await callGeminiRest(PRIMARY_MODEL, systemPrompt, message, history);
-        console.log(`[KASA Chat] SUCCESS ${PRIMARY_MODEL}`);
-      } catch (primaryErr) {
-        console.warn(`[KASA Chat] ${PRIMARY_MODEL} failed (${primaryErr.message}). Falling back to ${FALLBACK_MODEL}...`);
-        reply = await callGeminiRest(FALLBACK_MODEL, systemPrompt, message, history);
-        console.log(`[KASA Chat] SUCCESS ${FALLBACK_MODEL}`);
-      }
-      return sendJson(200, { reply: reply, text: reply, response: reply, modelUsed: PRIMARY_MODEL });
+      console.log(`[KASA Chat] Processing message from user ${authUser.uid.slice(0, 8)}...`);
+      const { text, modelUsed } = await executeGeminiChat(geminiKey, systemPrompt, message, history);
+      console.log(`[KASA Chat] Responded successfully via ${modelUsed}`);
+
+      return sendJson(200, {
+        reply: text,
+        text: text,
+        response: text,
+        modelUsed: modelUsed
+      });
     } catch (err) {
-      console.error('[KASA Chat] All Gemini models failed:', err.message);
-      return sendJson(500, { error: 'CHAT_FAILED', message: err.name === 'AbortError' ? 'Gemini took too long, please retry' : err.message });
+      console.error('[KASA Chat Error]', err.message);
+      return sendJson(500, {
+        error: 'CHAT_FAILED',
+        message: err.message.includes('timed out') ? 'Gemini response took too long, please retry.' : err.message
+      });
     }
   }
-
-
-  if ((req.method === 'POST' && (pathname === '/api/chat' || pathname === '/api/gemini/chat' || pathname === '/api/ai/chat'))) {
-    let authUser;
-    try { authUser = await authenticateRequest(req); } catch (err) {
-      return sendJson(err.statusCode || 401, { error: err.code || 'UNAUTHORIZED', message: err.message });
-    }
-    const body = await readBody();
-    const message = (body.message || body.prompt || '').trim();
-    const history = body.history || [];
-    if (!message) return sendJson(400, { error: 'INVALID_PROMPT', message: 'Message is required.' });
-
-    if (!GEMINI_API_KEY_FAST) return sendJson(503, { error: 'BACKEND_NOT_CONFIGURED', message: 'GEMINI_API_KEY missing' });
-
-    const systemPrompt = "You are KASA AI, Ghana's premier AI companion. You understand English, Ghanaian Pidgin, and Ghanaian languages (Twi, Fante, Ga, Ewe). Be warm, witty, culturally attuned, and concise.";
-
-    try {
-      let reply;
-      try {
-        console.log(`[KASA Chat] Trying ${PRIMARY_MODEL}...`);
-        reply = await callGeminiRest(PRIMARY_MODEL, systemPrompt, message, history);
-        console.log(`[KASA Chat] SUCCESS ${PRIMARY_MODEL}`);
-      } catch (primaryErr) {
-        console.warn(`[KASA Chat] ${PRIMARY_MODEL} failed (${primaryErr.message}). Falling back to ${FALLBACK_MODEL}...`);
-        reply = await callGeminiRest(FALLBACK_MODEL, systemPrompt, message, history);
-        console.log(`[KASA Chat] SUCCESS ${FALLBACK_MODEL}`);
-      }
-      return sendJson(200, { reply: reply, text: reply, response: reply, modelUsed: PRIMARY_MODEL });
-    } catch (err) {
-      console.error('[KASA Chat] All Gemini models failed:', err.message);
-      return sendJson(500, { error: 'CHAT_FAILED', message: err.name === 'AbortError' ? 'Gemini took too long, please retry' : err.message });
-    }
-  }
-
-
-
-
 
   // ==========================================
   // Public Endpoint: Available Plans & Pricing
