@@ -176,7 +176,7 @@ const server = http.createServer(async (req, res) => {
   // ==========================================
   // NEW: iOS Chat Endpoint via Render (uses AQ. key server-side)
   // POST /api/chat - uses process.env.GEMINI_API_KEY (your AQ.Ab8... token)
-  // This fixes Gemini 404 on iOS because AQ tokens don't work with ?key= in browser, only in Node SDK
+  // FIXED: 2.5-flash retired -> now 2.0-flash
   // ==========================================
   if ((req.method === 'POST' && (pathname === '/api/chat' || pathname === '/api/gemini/chat' || pathname === '/api/ai/chat'))) {
     let authUser;
@@ -210,7 +210,7 @@ const server = http.createServer(async (req, res) => {
         const { GoogleGenerativeAI } = require('@google/generative-ai');
         const genAI = new GoogleGenerativeAI(geminiKey);
         const model = genAI.getGenerativeModel({
-          model: 'gemini-2.5-flash',
+          model: 'gemini-2.0-flash',
           systemInstruction: "You are KASA AI, Ghana's premier AI companion. You understand English, Ghanaian Pidgin, and local Ghanaian languages (Twi, Fante, Ga, Ewe). Be warm, witty, culturally attuned to Ghanaian life, and highly helpful.",
         });
         const chatHistory = (history || []).slice(-10).map(m => ({
@@ -223,8 +223,8 @@ const server = http.createServer(async (req, res) => {
         replyText = result.response.text();
       } catch (sdkErr) {
         console.warn('[KASA Chat] SDK failed, trying REST fallback:', sdkErr.message);
-        // Fallback: Direct REST call with v1beta + gemini-2.5-flash (AQ key may still work via REST if passed as Bearer?)
-        const modelsToTry = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-001'];
+        // Fallback: Direct REST call - FIXED MODELS
+        const modelsToTry = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-latest', 'gemini-flash-latest'];
         for (const m of modelsToTry) {
           try {
             const url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${geminiKey}`;
