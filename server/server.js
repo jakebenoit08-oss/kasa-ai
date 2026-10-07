@@ -42,9 +42,7 @@ function loadEnv() {
             }
           }
         }
-      } catch (err) {
-        // Ignore file read errors
-      }
+      } catch (err) {}
     }
   }
 
@@ -58,9 +56,7 @@ function loadEnv() {
             process.env[k] = String(v);
           }
         }
-      } catch (err) {
-        // Ignore json parse error
-      }
+      } catch (err) {}
     }
   }
 }
@@ -116,13 +112,17 @@ function getApiKey() {
 }
 
 // ==========================================
-// GEMINI DUAL-MODE SERVICE
-// Seamlessly handles standard AIza keys AND AQ. OAuth Bearer Tokens
+// GEMINI FAST CHAT SERVICE
+// Uses active Lite tier models with available quota
 // ==========================================
-async function executeGeminiChat(token, systemInstruction, userMessage, conversationHistory = []) {
-  const modelsToTry = ['gemini-2.5-flash', 'gemini-2.0-flash'];
+async function executeGeminiChat(apiKey, systemInstruction, userMessage, conversationHistory = []) {
+  const modelsToTry = [
+    'gemini-flash-lite-latest',
+    'gemini-3.1-flash-lite',
+    'gemini-3.5-flash-lite',
+    'gemini-3.8-flash'
+  ];
 
-  // Normalize conversation history format
   const sanitizedHistory = (conversationHistory || []).slice(-6).map(h => ({
     role: (h.role === 'assistant' || h.role === 'model') ? 'model' : 'user',
     parts: [{ text: (h.text || h.content || '').slice(0, 1500) }]
@@ -139,26 +139,15 @@ async function executeGeminiChat(token, systemInstruction, userMessage, conversa
     generationConfig: { temperature: 0.7, maxOutputTokens: 800 }
   };
 
-  const isBearerToken = token.startsWith('AQ.') || token.startsWith('ya29.');
-
   for (const modelName of modelsToTry) {
-    let url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
-    const headers = { 'Content-Type': 'application/json' };
-
-    if (isBearerToken) {
-      headers['Authorization'] = `Bearer ${token}`;
-    } else {
-      url += `?key=${encodeURIComponent(token)}`;
-    }
-
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`;
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 12000);
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
 
     try {
-      console.log(`[KASA Chat] Calling ${modelName} (${isBearerToken ? 'Bearer Header' : 'API Key URL'})...`);
       const res = await fetch(url, {
         method: 'POST',
-        headers: headers,
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
         signal: controller.signal
       });
@@ -172,18 +161,11 @@ async function executeGeminiChat(token, systemInstruction, userMessage, conversa
           return { text: reply.trim(), modelUsed: modelName };
         }
       } else {
-        console.warn(`[KASA Chat] ${modelName} HTTP ${res.status}:`, data.error?.message || res.statusText);
-        if (res.status === 401 || res.status === 403) {
-          throw new Error(data.error?.message || 'Gemini authentication failed. Please verify your GEMINI_API_KEY.');
-        }
+        console.warn(`[KASA Chat] ${modelName} returned HTTP ${res.status}:`, data.error?.message || res.statusText);
       }
     } catch (err) {
       clearTimeout(timeoutId);
-      if (err.name === 'AbortError') {
-        console.warn(`[KASA Chat] ${modelName} timed out after 12s`);
-      } else {
-        console.warn(`[KASA Chat] ${modelName} error: ${err.message}`);
-      }
+      console.warn(`[KASA Chat] ${modelName} attempt error: ${err.message}`);
     }
   }
 
@@ -212,16 +194,12 @@ const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify(data));
   };
 
-  // Helper to read raw body buffer (crucial for HMAC signature verification)
   const readRawBody = () => new Promise((resolve) => {
     const chunks = [];
     req.on('data', chunk => { chunks.push(chunk); });
-    req.on('end', () => {
-      resolve(Buffer.concat(chunks));
-    });
+    req.on('end', () => { resolve(Buffer.concat(chunks)); });
   });
 
-  // Helper to read JSON body
   const readBody = async () => {
     const raw = await readRawBody();
     try {
@@ -608,7 +586,7 @@ const server = http.createServer(async (req, res) => {
         if (entitlement.musicCredits < COST_PER_GENERATION) {
           return sendJson(403, {
             error: 'CREDIT_LIMIT_REACHED',
-            message: `You have 0 KASA Music Credits remaining for this cycle. Upgrade to Plus or Pro to keep generating!`,
+            message: 'You have 0 KASA Music Credits remaining for this cycle. Upgrade to Plus or Pro to keep generating!',
             tier: entitlement.tier,
             subscriptionStatus: entitlement.subscriptionStatus,
             musicCredits: entitlement.musicCredits,
@@ -650,7 +628,6 @@ const server = http.createServer(async (req, res) => {
           releaseRefund();
         }
       }
-      console.warn('[KASA Backend] Music generation requested, but AIMUSIC_API_KEY is not configured.');
       return sendJson(503, {
         error: 'BACKEND_NOT_CONFIGURED',
         message: 'AIMusicAPI key is not configured on the KASA backend. Please supply AIMUSIC_API_KEY in the backend environment.',
@@ -710,7 +687,13 @@ const server = http.createServer(async (req, res) => {
 
       await recordTask({ taskId, userId: verifiedUid, status: 'pending', costCredits: COST_PER_GENERATION, refunded: false, prompt });
       console.log(`[KASA Backend] Task ${taskId} created for user ${verifiedUid}.`);
-      return sendJson(200, { taskId, status: 'pending', message: 'Creating your song...', remainingCredits: isOwner ? 999 : entitlement.musicCredits, musicCredits: isOwner ? 999 : entitlement.musicCredits });
+      return sendJson(200, {
+        taskId,
+        status: 'pending',
+        message: 'Creating your song...',
+        remainingCredits: isOwner ? 999 : entitlement.musicCredits,
+        musicCredits: isOwner ? 999 : entitlement.musicCredits
+      });
     } catch (err) {
       await rollbackReservation();
       return sendJson(503, { error: 'NETWORK_ERROR', message: "Couldn't connect to KASA Music." });
